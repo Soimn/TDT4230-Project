@@ -19,8 +19,11 @@
 #define PI32 3.1415926535f
 
 int
-main(int argc, char** args)
+main(int argc, char** argv)
 {
+    (void)argc;
+    (void)argv;
+    
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0) fprintf(stderr, "ERROR: failed to initialize sdl2. %s\n", SDL_GetError());
     else
     {
@@ -45,6 +48,7 @@ main(int argc, char** args)
             ImGui::CreateContext();
             ImGuiIO& io = ImGui::GetIO();
             io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+            io.IniFilename = 0;
             
             ImGui::StyleColorsDark();
             
@@ -112,6 +116,11 @@ main(int argc, char** args)
                 ImGui_ImplSDL2_NewFrame();
                 ImGui::NewFrame();
                 
+                int window_width;
+                int window_height;
+                SDL_GetWindowSize(window, &window_width, &window_height);
+                ImGui::SetNextWindowPos(ImVec2((1 - 0.15f)*window_width, 0));
+                ImGui::SetNextWindowSize(ImVec2(0.15f*window_width, (float)window_height));
                 ImGui::Begin("Properties", 0, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove);
                 
                 if (ImGui::BeginCombo("Resolution", current_resolution_name))
