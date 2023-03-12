@@ -1,0 +1,39 @@
+#version 450 core
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(rgba32f, binding = 0) uniform image2D backbuffer;
+
+layout(location = 0) uniform float fov;
+
+void
+main()
+{
+	float screen_width  = 1.0;
+	float screen_height = 9.0/16.0;
+	float near_plane    = 1.0/(2.0*tan(fov/2.0));
+
+	float screen_dx = screen_width  / gl_NumWorkGroups.x;
+	float screen_dy = screen_height / gl_NumWorkGroups.y;
+
+	vec3 ray = normalize(vec3(screen_width/2 - screen_dx*float(gl_GlobalInvocationID.x), -screen_height/2 + screen_dy*float(gl_GlobalInvocationID.y), near_plane));
+
+	vec3 sphere_pos     = vec3(0, 0, 5);
+	float sphere_radius = 1.0;
+
+	vec3 p = sphere_pos;
+	float b = dot(p, ray);
+	float discriminant = b*b - dot(p, p) + sphere_radius*sphere_radius;
+
+	float lum = 0;
+	if (discriminant >= 0)
+	{
+		float t = b - sqrt(discriminant);
+		
+		vec3 hit    = ray*t;
+		vec3 normal = normalize(hit - sphere_pos);
+		
+		lum = 0.15 + max(0, dot(normal, vec3(-0.2, 1, 0)));
+	}
+
+	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(vec3(lum), 1.0));
+}

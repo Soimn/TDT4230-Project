@@ -54,6 +54,8 @@ main(int argc, char** argv)
             else if ((glew_error = glewInit()) != GLEW_OK)        fprintf(stderr, "ERROR: failed initialize OpenGL extension loader. %s\n", glewGetErrorString(glew_error));
             else
             {
+                bool setup_failed = false;
+                
                 SDL_GL_SetSwapInterval(1);
                 
                 glEnable(GL_DEBUG_OUTPUT);
@@ -112,39 +114,46 @@ main(int argc, char** argv)
                 };
                 
                 // 1920x1080
-                char* current_resolution_name = resolution_name_list[11];
-                int image_width  = resolution_list[11][0];
-                int image_height = resolution_list[11][1];
+                char* current_resolution_name = resolution_name_list[5];
+                int backbuffer_width  = resolution_list[5][0];
+                int backbuffer_height = resolution_list[5][1];
                 
                 float fov = PI32/2;
                 
-                GLuint default_vao;
-                GLuint program;
+                GLuint display_vao;
+                GLuint display_program;
                 {
                     char* vertex_shader_code =
                         "#version 450\n"
                         "\n"
+                        "out vec2 uv;\n"
+                        "\n"
                         "void\n"
                         "main()\n"
                         "{\n"
-                        "\tgl_Position.xy = vec2((gl_VertexID/2)*4, -(gl_VertexID%2)*4) + vec2(-1,1);\n"
+                        "\tgl_Position.xy = vec2((gl_VertexID%2)*4, (gl_VertexID/2)*4) + vec2(-1,-1);\n"
                         "\tgl_Position.zw = vec2(0, 1);\n"
+                        "\tuv             = vec2((gl_VertexID%2)*2, (gl_VertexID/2)*2);\n"
                         "}\n";
                     
                     char* fragment_shader_code =
                         "#version 450\n"
                         "\n"
+                        "in vec2 uv;\n"
+                        "\n"
                         "out vec4 color;\n"
+                        "\n"
+                        "layout(binding = 0) uniform sampler2D backbuffer;\n"
                         "\n"
                         "void\n"
                         "main()\n"
                         "{\n"
-                        "\tcolor = vec4(1, 0, 1, 1);"
+                        "\tcolor = vec4(texture(backbuffer, uv).rgb, 1.0);"
                         "}\n";
                     
-                    glGenVertexArrays(1, &default_vao);
+                    glGenVertexArrays(1, &display_vao);
                     
-                    program = glCreateProgram();
+                    display_program = glCreateProgram();
                     
                     GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
                     glShaderSource(vertex_shader, 1, &vertex_shader_code, 0);
@@ -154,78 +163,173 @@ main(int argc, char** argv)
                     glShaderSource(fragment_shader, 1, &fragment_shader_code, 0);
                     glCompileShader(fragment_shader);
                     
-                    glAttachShader(program, vertex_shader);
-                    glAttachShader(program, fragment_shader);
-                    glLinkProgram(program);
+                    glAttachShader(display_program, vertex_shader);
+                    glAttachShader(display_program, fragment_shader);
+                    glLinkProgram(display_program);
                     
                     glDeleteShader(vertex_shader);
                     glDeleteShader(fragment_shader);
                 }
                 
-                bool done = false;
-                while (!done)
+                GLuint compute_program = 0;
                 {
-                    SDL_Event event;
-                    while (SDL_PollEvent(&event))
+                    FILE* compute_shader_file = fopen("../src/compute_shader.comp", "r");
+                    if (compute_shader_file == 0)
                     {
-                        ImGui_ImplSDL2_ProcessEvent(&event);
-                        if (event.type == SDL_QUIT) done = true;
+                        fprintf(stderr, "ERROR: failed to open compute shader file.\n");
+                        setup_failed = true;
                     }
-                    
-                    ImGui_ImplOpenGL3_NewFrame();
-                    ImGui_ImplSDL2_NewFrame();
-                    ImGui::NewFrame();
-                    
-                    int window_width;
-                    int window_height;
-                    SDL_GetWindowSize(window, &window_width, &window_height);
-                    ImGui::SetNextWindowPos(ImVec2((1 - 0.15f)*window_width, 0));
-                    ImGui::SetNextWindowSize(ImVec2(0.15f*window_width, (float)window_height));
-                    ImGui::Begin("Properties", 0, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove);
-                    
-                    if (ImGui::BeginCombo("Resolution", current_resolution_name))
+                    else
                     {
-                        for (int i = 0; i < IM_ARRAYSIZE(resolution_name_list); ++i)
+                        fseek(compute_shader_file, 0, SEEK_END);
+                        int compute_shader_file_size = ftell(compute_shader_file);
+                        rewind(compute_shader_file);
+                        
+                        char* compute_shader_code = (char*)malloc(compute_shader_file_size + 1);
+                        memset(compute_shader_code, 0, compute_shader_file_size + 1);
+                        
+                        if (compute_shader_code == 0 || fread(compute_shader_code, 1, compute_shader_file_size, compute_shader_file) != compute_shader_file_size)
                         {
-                            if (ImGui::Selectable(resolution_name_list[i], resolution_name_list[i] == current_resolution_name))
+                            fprintf(stderr, "ERROR: failed to read compute shader file.\n");
+                            setup_failed = true;
+                        }
+                        else
+                        {
+                            do
                             {
-                                current_resolution_name = resolution_name_list[i];
-                                image_width  = resolution_list[i][0];
-                                image_height = resolution_list[i][1];
-                            }
-                            
-                            if (resolution_name_list[i] == current_resolution_name)
-                            {
-                                ImGui::SetItemDefaultFocus();
-                            }
+                                GLuint compute_shader = glCreateShader(GL_COMPUTE_SHADER);
+                                glShaderSource(compute_shader, 1, &compute_shader_code, 0);
+                                glCompileShader(compute_shader);
+                                
+                                GLint status;
+                                glGetShaderiv(compute_shader, GL_COMPILE_STATUS, &status);
+                                if (!status)
+                                {
+                                    char buffer[1024];
+                                    glGetShaderInfoLog(compute_shader, sizeof(buffer), 0, buffer);
+                                    fprintf(stderr, "%s\n", buffer);
+                                    setup_failed = true;
+                                    break;
+                                }
+                                
+                                compute_program = glCreateProgram();
+                                glAttachShader(compute_program, compute_shader);
+                                glLinkProgram(compute_program);
+                                
+                                glGetProgramiv(compute_program, GL_LINK_STATUS, &status);
+                                if (!status)
+                                {
+                                    char buffer[1024];
+                                    glGetProgramInfoLog(compute_program, sizeof(buffer), 0, buffer);
+                                    fprintf(stderr, "%s\n", buffer);
+                                    setup_failed = true;
+                                    break;
+                                }
+                                
+                                glValidateProgram(compute_program);
+                                glGetProgramiv(compute_program, GL_VALIDATE_STATUS, &status);
+                                if (!status)
+                                {
+                                    char buffer[1024];
+                                    glGetProgramInfoLog(compute_program, sizeof(buffer), 0, buffer);
+                                    fprintf(stderr, "%s\n", buffer);
+                                    setup_failed = true;
+                                    break;
+                                }
+                            } while (0);
                         }
                         
-                        ImGui::EndCombo();
+                        free(compute_shader_code);
+                        fclose(compute_shader_file);
                     }
-                    
-                    ImGui::SliderFloat("Fov", &fov, 0.1f, 0.9f*PI32, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-                    ImGui::End();
-                    
-                    ImGui::Render();
-                    
-                    glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-                    glClearColor(0, 0, 0, 1);
-                    glClear(GL_COLOR_BUFFER_BIT);
-                    
-                    glBindVertexArray(default_vao);
-                    glUseProgram(program);
-                    glDrawArrays(GL_TRIANGLES, 0, 3);
-                    glBindVertexArray(0);
-                    
-                    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-                    
-                    SDL_GL_SwapWindow(window);
                 }
+                
+                if (!setup_failed)
+                {
+                    GLuint backbuffer_texture = 0;
+                    
+                    bool done = false;
+                    while (!done)
+                    {
+                        SDL_Event event;
+                        while (SDL_PollEvent(&event))
+                        {
+                            ImGui_ImplSDL2_ProcessEvent(&event);
+                            if (event.type == SDL_QUIT) done = true;
+                        }
+                        
+                        ImGui_ImplOpenGL3_NewFrame();
+                        ImGui_ImplSDL2_NewFrame();
+                        ImGui::NewFrame();
+                        
+                        int window_width;
+                        int window_height;
+                        SDL_GetWindowSize(window, &window_width, &window_height);
+                        ImGui::SetNextWindowPos(ImVec2((1 - 0.15f)*window_width, 0));
+                        ImGui::SetNextWindowSize(ImVec2(0.15f*window_width, (float)window_height));
+                        ImGui::Begin("Properties", 0, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove);
+                        
+                        if (ImGui::BeginCombo("Resolution", current_resolution_name))
+                        {
+                            for (int i = 0; i < IM_ARRAYSIZE(resolution_name_list); ++i)
+                            {
+                                if (ImGui::Selectable(resolution_name_list[i], resolution_name_list[i] == current_resolution_name))
+                                {
+                                    current_resolution_name = resolution_name_list[i];
+                                    backbuffer_width  = resolution_list[i][0];
+                                    backbuffer_height = resolution_list[i][1];
+                                }
+                                
+                                if (resolution_name_list[i] == current_resolution_name)
+                                {
+                                    ImGui::SetItemDefaultFocus();
+                                }
+                            }
+                            
+                            ImGui::EndCombo();
+                        }
+                        
+                        ImGui::SliderFloat("Fov", &fov, 0.1f, 0.9f*PI32, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                        ImGui::End();
+                        
+                        ImGui::Render();
+                        
+                        glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+                        glClearColor(0, 0, 0, 1);
+                        glClear(GL_COLOR_BUFFER_BIT);
+                        
+                        if (backbuffer_texture != 0) glDeleteTextures(1, &backbuffer_texture);
+                        glGenTextures(1, &backbuffer_texture);
+                        glActiveTexture(GL_TEXTURE0);
+                        glBindTexture(GL_TEXTURE_2D, backbuffer_texture);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, backbuffer_width, backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
+                        
+                        glBindImageTexture(0, backbuffer_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+                        
+                        glUseProgram(compute_program);
+                        glUniform1f(0, fov);
+                        glDispatchCompute(backbuffer_width, backbuffer_height, 1);
+                        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                        
+                        glBindVertexArray(display_vao);
+                        glUseProgram(display_program);
+                        glDrawArrays(GL_TRIANGLES, 0, 3);
+                        glBindVertexArray(0);
+                        
+                        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                        
+                        SDL_GL_SwapWindow(window);
+                    }
+                }
+                
+                ImGui_ImplOpenGL3_Shutdown();
+                ImGui_ImplSDL2_Shutdown();
+                ImGui::DestroyContext();
             }
-            
-            ImGui_ImplOpenGL3_Shutdown();
-            ImGui_ImplSDL2_Shutdown();
-            ImGui::DestroyContext();
             
             SDL_GL_DeleteContext(gl_context);
             SDL_DestroyWindow(window);
