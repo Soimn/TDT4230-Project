@@ -4,6 +4,6 @@
 [submodule "vendor/SDL"]
 	path = vendor/SDL
 	url = https://github.com/libsdl-org/SDL.git
-[submodule "vendor\\glew-cmake"]
-	path = vendor\\glew-cmake
+[submodule "vendor/glew-cmake"]
+	path = vendor/glew-cmake
 	url = https://github.com/Perlmint/glew-cmake.git
