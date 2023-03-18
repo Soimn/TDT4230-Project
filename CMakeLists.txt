@@ -7,9 +7,11 @@ add_subdirectory(vendor/SDL)
 
 set(CMAKE_CXX_STANDARD 14)
 if(MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
+	set(CMAKE_CXX_FLAGS_DEBUG_INIT "/W4 /Od /Zo /Z7")
+	set(CMAKE_CXX_FLAGS_RELEASE_INIT "/W4 /O2")
 else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wpedantic")
+	set(CMAKE_CXX_FLAGS_DEBUG_INIT "-Wall -Wextra -Wpedantic -Og")
+	set(CMAKE_CXX_FLAGS_RELEASE_INIT "-Wall -Wextra -Wpedantic -O2")
 endif()
 
 set (CMAKE_SUPPRESS_REGENERATION TRUE)
