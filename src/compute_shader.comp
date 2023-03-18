@@ -12,8 +12,8 @@ main()
 	float screen_height = 9.0/16.0;
 	float near_plane    = 1.0/(2.0*tan(fov/2.0));
 
-	float screen_dx = screen_width  / gl_NumWorkGroups.x;
-	float screen_dy = screen_height / gl_NumWorkGroups.y;
+	float screen_dx = screen_width  / (gl_NumWorkGroups.x*gl_WorkGroupSize.x);
+	float screen_dy = screen_height / (gl_NumWorkGroups.y*gl_WorkGroupSize.y);
 
 	vec3 ray = normalize(vec3(screen_width/2 - screen_dx*float(gl_GlobalInvocationID.x), -screen_height/2 + screen_dy*float(gl_GlobalInvocationID.y), near_plane));
 

@@ -158,18 +158,18 @@ int Resolutions[][2] = {
 struct State
 {
     float fov;
+    
     int current_resolution_index;
-    int buffer_width;
-    int buffer_height;
-    GLuint frontbuffer_texture;
+    int backbuffer_width;
+    int backbuffer_height;
     GLuint backbuffer_texture;
+    
     GLuint display_vao;
     GLuint display_program;
+    
     GLuint compute_program;
-    GLsync compute_fence;
     
     bool should_regen_buffers;
-    bool compute_shader_done;
     
     u64 last_render_timestamp;
     float last_render_time;
@@ -189,7 +189,7 @@ main(int argc, char** argv)
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
-        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 0);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
         
         SDL_Window* window = SDL_CreateWindow("TDT4230 Project", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 0, 0, SDL_WINDOW_FULLSCREEN_DESKTOP|SDL_WINDOW_OPENGL);
@@ -206,7 +206,7 @@ main(int argc, char** argv)
             else if ((glew_error = glewInit()) != GLEW_OK)        fprintf(stderr, "ERROR: failed initialize OpenGL extension loader. %s\n", glewGetErrorString(glew_error));
             else
             {
-                SDL_GL_SetSwapInterval(1);
+                SDL_GL_SetSwapInterval(0);
                 glEnable(GL_DEBUG_OUTPUT);
                 glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
                 glDebugMessageCallback(GLDebugProc, 0);
@@ -232,8 +232,8 @@ main(int argc, char** argv)
                 State state = {};
                 state.fov                      = PI32/2;
                 state.current_resolution_index = 5;
-                state.buffer_width             = Resolutions[state.current_resolution_index][0];
-                state.buffer_height            = Resolutions[state.current_resolution_index][1];
+                state.backbuffer_width         = Resolutions[state.current_resolution_index][0];
+                state.backbuffer_height        = Resolutions[state.current_resolution_index][1];
                 state.should_regen_buffers     = true;
                 
                 /// Program setup
@@ -242,22 +242,13 @@ main(int argc, char** argv)
                     /// Generate front- and backbuffer textures
                     {
                         glActiveTexture(GL_TEXTURE0);
-                        
                         glGenTextures(1, &state.backbuffer_texture);
                         glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.buffer_width, state.buffer_height, 0, GL_RGBA, GL_FLOAT, 0);
-                        
-                        glGenTextures(1, &state.frontbuffer_texture);
-                        glBindTexture(GL_TEXTURE_2D, state.frontbuffer_texture);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.buffer_width, state.buffer_height, 0, GL_RGBA, GL_FLOAT, 0);
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
                     }
                     
                     /// Create program and vertex array for displaying frontbuffer on screen
@@ -415,8 +406,9 @@ main(int argc, char** argv)
                                 if (ImGui::Selectable(ResolutionNames[i], i == state.current_resolution_index))
                                 {
                                     state.current_resolution_index = i;
-                                    state.buffer_width         = Resolutions[i][0];
-                                    state.buffer_height        = Resolutions[i][1];
+                                    state.backbuffer_width         = Resolutions[i][0];
+                                    state.backbuffer_height        = Resolutions[i][1];
+                                    
                                     state.should_regen_buffers = true;
                                 }
                                 
@@ -433,68 +425,43 @@ main(int argc, char** argv)
                         ImGui::Text("last render time: %.2f ms", state.last_render_time);
                         ImGui::End();
                         
-                        ImGui::Render();
-                        
                         glViewport(0, 0, window_width, window_height);
                         glClearColor(0, 0, 0, 1);
                         glClear(GL_COLOR_BUFFER_BIT);
                         
-                        bool compute_shader_done = false;
-                        if (state.compute_fence != 0)
+                        if (state.should_regen_buffers)
                         {
-                            GLsizei sync_length = 0;
-                            GLint compute_status;
-                            glGetSynciv(state.compute_fence, GL_SYNC_STATUS, 1, &sync_length, &compute_status);
-                            compute_shader_done = (sync_length == 1 && compute_status == GL_SIGNALED);
+                            glActiveTexture(GL_TEXTURE0);
+                            glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
+                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
+                            
+                            state.should_regen_buffers = false;
                         }
                         
-                        if (compute_shader_done || state.should_regen_buffers)
-                        {
-                            if (compute_shader_done)
-                            {
-                                GLuint tmp = state.backbuffer_texture;
-                                state.backbuffer_texture  = state.frontbuffer_texture;
-                                state.frontbuffer_texture = tmp;
-                            }
-                            
-                            if (state.should_regen_buffers)
-                            {
-                                glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
-                                
-                                glActiveTexture(GL_TEXTURE0);
-                                
-                                glBindTexture(GL_TEXTURE_2D, state.frontbuffer_texture);
-                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.buffer_width, state.buffer_height, 0, GL_RGBA, GL_FLOAT, 0);
-                                
-                                glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
-                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.buffer_width, state.buffer_height, 0, GL_RGBA, GL_FLOAT, 0);
-                                
-                                state.should_regen_buffers = false;
-                            }
-                            
-                            glUseProgram(state.compute_program);
-                            glBindImageTexture(0, state.backbuffer_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-                            glUniform1f(0, state.fov);
-                            
-                            ASSERT(state.buffer_width <= 65535 && state.buffer_height <= 65535);
-                            glDispatchCompute(state.buffer_width, state.buffer_height, 1);
-                            
-                            glDeleteSync(state.compute_fence);
-                            state.compute_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-                            
-                            u64 current_timestamp = GetTicks();
-                            state.last_render_time = DiffTicksInMs(state.last_render_timestamp, current_timestamp);
-                            state.last_render_timestamp = current_timestamp;
-                            state.compute_shader_done = false;
-                        }
+                        glUseProgram(state.compute_program);
+                        glBindImageTexture(0, state.backbuffer_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+                        glUniform1f(0, state.fov);
+                        
+                        GLuint num_work_groups_x = state.backbuffer_width/32  + (state.backbuffer_width%32 != 0);
+                        GLuint num_work_groups_y = state.backbuffer_height/32 + (state.backbuffer_height%32 != 0);
+                        ASSERT(num_work_groups_x <= 65535 && num_work_groups_y <= 65535);
+                        glDispatchCompute(num_work_groups_x, num_work_groups_y, 1);
+                        
+                        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
                         
                         glBindVertexArray(state.display_vao);
                         glActiveTexture(GL_TEXTURE0);
-                        glBindTexture(GL_TEXTURE_2D, state.frontbuffer_texture);
+                        glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
                         glUseProgram(state.display_program);
                         glDrawArrays(GL_TRIANGLES, 0, 3);
                         
+                        ImGui::Render();
                         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                        
+                        glFinish();
+                        u64 current_timestamp = GetTicks();
+                        state.last_render_time = DiffTicksInMs(state.last_render_timestamp, current_timestamp);
+                        state.last_render_timestamp = current_timestamp;
                         
                         SDL_GL_SwapWindow(window);
                     }
