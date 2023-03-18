@@ -163,6 +163,7 @@ struct State
     int backbuffer_width;
     int backbuffer_height;
     GLuint backbuffer_texture;
+    GLuint accumulated_frames_texture;
     
     GLuint display_vao;
     GLuint display_program;
@@ -170,6 +171,7 @@ struct State
     GLuint compute_program;
     
     bool should_regen_buffers;
+    u32 frame_index;
     
     u64 last_render_timestamp;
     float last_render_time;
@@ -244,6 +246,15 @@ main(int argc, char** argv)
                         glActiveTexture(GL_TEXTURE0);
                         glGenTextures(1, &state.backbuffer_texture);
                         glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
+                        
+                        glActiveTexture(GL_TEXTURE1);
+                        glGenTextures(1, &state.accumulated_frames_texture);
+                        glBindTexture(GL_TEXTURE_2D, state.accumulated_frames_texture);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -421,7 +432,11 @@ main(int argc, char** argv)
                             ImGui::EndCombo();
                         }
                         
-                        ImGui::SliderFloat("Fov", &state.fov, 0.1f, 0.9f*PI32, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                        if (ImGui::SliderFloat("Fov", &state.fov, 0.1f, 0.9f*PI32, "%.3f", ImGuiSliderFlags_AlwaysClamp))
+                        {
+                            state.should_regen_buffers = true;
+                        }
+                        
                         ImGui::Text("last render time: %.2f ms", state.last_render_time);
                         ImGui::End();
                         
@@ -435,12 +450,24 @@ main(int argc, char** argv)
                             glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
                             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
                             
+                            glActiveTexture(GL_TEXTURE1);
+                            glBindTexture(GL_TEXTURE_2D, state.accumulated_frames_texture);
+                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
+                            float f[4] = {0, 0, 0, 0};
+                            glClearTexImage(state.accumulated_frames_texture, 0, GL_RGBA, GL_FLOAT, f);
+                            
+                            glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
+                            
                             state.should_regen_buffers = false;
+                            state.frame_index          = 0;
                         }
                         
                         glUseProgram(state.compute_program);
                         glBindImageTexture(0, state.backbuffer_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-                        glUniform1f(0, state.fov);
+                        glBindImageTexture(1, state.accumulated_frames_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+                        glUniform1ui(0, state.frame_index);
+                        glUniform1f(1, state.fov);
+                        glUniform2f(2, (float)state.backbuffer_width, (float)state.backbuffer_height);
                         
                         GLuint num_work_groups_x = state.backbuffer_width/32  + (state.backbuffer_width%32 != 0);
                         GLuint num_work_groups_y = state.backbuffer_height/32 + (state.backbuffer_height%32 != 0);
@@ -462,6 +489,8 @@ main(int argc, char** argv)
                         u64 current_timestamp = GetTicks();
                         state.last_render_time = DiffTicksInMs(state.last_render_timestamp, current_timestamp);
                         state.last_render_timestamp = current_timestamp;
+                        
+                        state.frame_index += 1;
                         
                         SDL_GL_SwapWindow(window);
                     }
