@@ -15,6 +15,8 @@
 
 #define ASSERT(EX) ((EX) ? 1 : (*(volatile int*)0 = 0), 0)
 
+#define ARRAY_SIZE(A) (sizeof(A) / sizeof((A)[0]))
+
 #define CONCAT_(X, Y) X##Y
 #define CONCAT(X, Y) CONCAT_(X, Y)
 
@@ -314,23 +316,41 @@ main(int argc, char** argv)
                     state.compute_program = glCreateProgram();
                     {
                         FILE* compute_shader_file = fopen("../src/compute_shader.comp", "rb");
+                        FILE* pcg_file = fopen("../vendor/pcg.comp", "rb");
                         if (compute_shader_file == 0)
                         {
                             fprintf(stderr, "ERROR: failed to open compute shader file.\n");
                             setup_failed = true;
                         }
+												else if (pcg_file == 0)
+												{
+														fprintf(stderr, "ERROR: failed to open pcg shader file.\n");
+														setup_failed = true;
+												}
                         else
                         {
                             fseek(compute_shader_file, 0, SEEK_END);
                             int compute_shader_file_size = ftell(compute_shader_file);
                             rewind(compute_shader_file);
+
+                            fseek(pcg_file, 0, SEEK_END);
+                            int pcg_file_size = ftell(pcg_file);
+                            rewind(pcg_file);
                             
                             char* compute_shader_code = (char*)malloc(compute_shader_file_size + 1);
                             memset(compute_shader_code, 0, compute_shader_file_size + 1);
+
+                            char* pcg_code = (char*)malloc(pcg_file_size + 1);
+                            memset(pcg_code, 0, pcg_file_size + 1);
                             
                             if (compute_shader_code == 0 || fread(compute_shader_code, 1, compute_shader_file_size, compute_shader_file) != compute_shader_file_size)
                             {
                                 fprintf(stderr, "ERROR: failed to read compute shader file.\n");
+                                setup_failed = true;
+                            }
+														else if (pcg_code == 0 || fread(pcg_code, 1, pcg_file_size, pcg_file) != pcg_file_size)
+                            {
+                                fprintf(stderr, "ERROR: failed to read pcg shader file.\n");
                                 setup_failed = true;
                             }
                             else
@@ -340,7 +360,12 @@ main(int argc, char** argv)
                                     GLuint compute_shader = glCreateShader(GL_COMPUTE_SHADER);
                                     DEFER(glDeleteShader(compute_shader));
                                     
-                                    glShaderSource(compute_shader, 1, &compute_shader_code, 0);
+																		char* sources[2] = {
+																			compute_shader_code,
+																			pcg_code
+																		};
+
+                                    glShaderSource(compute_shader, ARRAY_SIZE(sources), sources, 0);
                                     glCompileShader(compute_shader);
                                     
                                     GLint status;
@@ -436,7 +461,6 @@ main(int argc, char** argv)
                         {
                             state.should_regen_buffers = true;
                         }
-                        
                         ImGui::Text("last render time: %.2f ms", state.last_render_time);
                         ImGui::End();
                         

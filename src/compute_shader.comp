@@ -8,149 +8,60 @@ layout(location = 0) uniform uint frame_index;
 layout(location = 1) uniform float fov;
 layout(location = 2) uniform vec2 backbuffer_dim;
 
-int random_01_counter = 0;
+#define PI32  3.1415926535
+#define TAU32 6.2831853071
+#define PI32_ON_2 1.5707963267
+
+struct pcg32_state
+{
+	uint state;
+	uint increment;
+};
+
+void pcg32_seed(inout pcg32_state pcg_state, uint seed, uint increment);
+uint pcg32_next(inout pcg32_state pcg_state);
+
+pcg32_state pcg_state;
+
 float
 Random01()
 {
-	random_01_counter += 42;
-	return fract(177013*sin((random_01_counter*256 + frame_index)*215600));
+	return pcg32_next(pcg_state) * 2.3283064365386962890625e-10;
 }
 
-struct Sphere
+// NOTE: pdf = 1/4pi
+vec3
+RandomDir()
 {
-	vec3 pos;
-	float radius;
-	vec3 color;
-	vec3 emission;
-};
+	float x_1 = Random01();
+	float x_2 = Random01();
 
-float box_height = 20;
-float box_width  = 20;
-float box_depth  = 60;
+	float phi = TAU32*x_1;
+	//float theta = PI32*x_2;
+	float theta = acos(1 - 2*x_2); // NOTE: inverse transform sampling: https://corysimon.github.io/articles/uniformdistn-on-sphere/
 
-Sphere spheres[] = Sphere[](
-	Sphere(
-		vec3(0, 10000 + box_height/2, box_depth/2),
-		10000,
-		vec3(1, 1, 1),
-		vec3(0)
-	),
-	Sphere(
-		vec3(0, -10000 - box_height/2, box_depth/2),
-		10000,
-		vec3(1, 1, 1),
-		vec3(0)
-	),
-	Sphere(
-		vec3(10000 + box_width/2, 0, box_depth/2),
-		10000,
-		vec3(1, 0, 0),
-		vec3(0)
-	),
-	Sphere(
-		vec3(-10000 - box_width/2, 0, box_depth/2),
-		10000,
-		vec3(0, 1, 0),
-		vec3(0)
-	),
-	Sphere(
-		vec3(0, 0, 10000 + box_depth/2),
-		10000,
-		vec3(1, 1, 1),
-		vec3(0)
-	),
-	Sphere(
-		vec3(0, 0, -10000 - box_depth/2),
-		10000,
-		vec3(1, 1, 1),
-		vec3(0)
-	),
-	Sphere(
-		vec3(box_width/2 - 4.1, -box_height/2 + 4, box_depth/2 - 4.1),
-		4,
-		vec3(1, 1, 1),
-		vec3(0)
-	),
-	Sphere(
-		vec3(-box_width/2 + 4.1, -box_height/2 + 4, box_depth/2 - 4*3.1),
-		4,
-		vec3(1, 1, 1),
-		vec3(0)
-	),
-	Sphere(
-		vec3(0, box_height/2-0.5, box_depth/4),
-		0.5,
-		vec3(1, 1, 1),
-		vec3(1, 1, 1)
-	)
-);
+	return vec3(cos(phi)*sin(theta), sin(phi)*sin(theta), cos(theta));
+}
 
-struct HitData
+// NOTE: pdf = 1/2pi
+vec3
+RandomDirInHemi(vec3 plane_normal)
 {
-	vec3 point;
-	vec3 normal;
-	int object_index;
-};
-
-HitData
-CastRay(vec3 origin, vec3 ray, int ignore_index)
-{
-	HitData result = HitData(vec3(0), vec3(0), -1);
-
-	float inf = 1000000;
-	float closest_t = inf;
-	for (int i = 0; i < spheres.length(); ++i)
-	{
-		if (i == ignore_index) continue;
-
-		vec3 p = -spheres[i].pos;
-		float r = spheres[i].radius;
-
-		float b = dot(p, ray);
-		float discriminant = b*b - dot(p, p) + r*r;
-
-		float t = -b - sqrt(discriminant);
-		if (discriminant >= 0 && t > 0 && t < closest_t)
-		{
-			closest_t = t;
-			result.object_index = i;
-			result.point        = ray*t;
-			result.normal       = normalize(result.point - spheres[i].pos);
-		}
-	}
-
-	return result;
+	vec3 dir = RandomDir();
+	return (dot(dir, plane_normal) < 0 ? -dir : dir);
 }
 
 void
 main()
 {
+	uint invocation_index = gl_GlobalInvocationID.y*gl_NumWorkGroups.x*gl_WorkGroupSize.x + gl_GlobalInvocationID.x;
+	uint seed = (invocation_index + frame_index*187272781)*178525871;
+	pcg32_seed(pcg_state, seed, invocation_index);
+
 	if (gl_GlobalInvocationID.x < backbuffer_dim.x && gl_GlobalInvocationID.y < backbuffer_dim.y)
 	{
-		float screen_width  = 1.0;
-		float screen_height = 9.0/16.0;
-		float near_plane    = 1.0/(2.0*tan(fov/2.0));
-
-		float screen_dx = screen_width  / (gl_NumWorkGroups.x*gl_WorkGroupSize.x);
-		float screen_dy = screen_height / (gl_NumWorkGroups.y*gl_WorkGroupSize.y);
-
-		vec3 ray = vec3(screen_width/2 - screen_dx*float(gl_GlobalInvocationID.x), -screen_height/2 + screen_dy*float(gl_GlobalInvocationID.y), near_plane);
-		ray += vec3(screen_dx*Random01(), screen_dy*Random01(), 0);
-		ray = normalize(ray);
-
-		vec3 color = vec3(0);
-
-		HitData hit = CastRay(vec3(0), ray, -1);
-		if (hit.object_index != -1)
-		{
-			vec3 to_light = normalize(spheres[8].pos - hit.point);
-
-			color = spheres[hit.object_index].color * max(vec3(0), dot(hit.normal, to_light));
-		}
-
-		vec3 accumulated_color = imageLoad(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy)).xyz + color;
-		imageStore(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_color, 1));	
-
-		imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_color/float(frame_index + 1), 1.0));
+		uint x = gl_WorkGroupID.x*gl_WorkGroupSize.x + frame_index % gl_WorkGroupSize.x;
+		uint y = gl_WorkGroupID.y*gl_WorkGroupSize.y + (frame_index / gl_WorkGroupSize.x) % gl_WorkGroupSize.y;
+		imageStore(backbuffer, ivec2(x, y), vec4(vec3(Random01()), 1));
 	}
 }
