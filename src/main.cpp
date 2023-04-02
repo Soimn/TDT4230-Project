@@ -171,6 +171,7 @@ struct State
     GLuint compute_program;
     GLuint backbuffer_texture;
     GLuint accumulated_frames_texture;
+		GLuint abg_texture;
 		GLuint triangle_buffer;
     
     bool should_regen_buffers;
@@ -184,7 +185,7 @@ struct Triangle
 {
 	float alpha[4];
 	float beta[4];
-	float gamma;
+	float gamma[4];
 };
 
 int
@@ -322,9 +323,16 @@ main(int argc, char** argv)
                     
 										/// Create shader buffers for storing scene data
 										{
-											unsigned int triangle_count = 100000;
+											unsigned int triangle_count = 10000;
 											Triangle* triangles = (Triangle*)malloc(sizeof(Triangle)*triangle_count);
 											DEFER(free(triangles));
+
+											float* alpha = (float*)malloc(4*sizeof(float)*triangle_count);
+											float* beta = (float*)malloc(4*sizeof(float)*triangle_count);
+											float* gamma = (float*)malloc(4*sizeof(float)*triangle_count);
+											DEFER(free(alpha));
+											DEFER(free(beta));
+											DEFER(free(gamma));
 
 											float screen_width = 1;
 											float screen_height = 9.0f/16.0f;
@@ -350,7 +358,7 @@ main(int argc, char** argv)
 
 											template_triangle.alpha[3] = p[2][0];
 											template_triangle.beta[3]  = p[2][1];
-											template_triangle.gamma    = p[2][2];
+											template_triangle.gamma[0] = p[2][2];
 
 											for (unsigned int i = 0; i < triangle_count; ++i)
 											{
@@ -542,6 +550,7 @@ main(int argc, char** argv)
                         glUseProgram(state.compute_program);
                         glBindImageTexture(0, state.backbuffer_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
                         glBindImageTexture(1, state.accumulated_frames_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+                        glBindImageTexture(3, state.abg_texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
                         glUniform1ui(0, state.frame_index);
                         glUniform1f(1, state.fov);
                         glUniform2f(2, (float)state.backbuffer_width, (float)state.backbuffer_height);
