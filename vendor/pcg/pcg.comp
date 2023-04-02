@@ -27,11 +27,13 @@
 #define PCG_DEFAULT_MULTIPLIER_32  747796405U
 #define PCG_DEFAULT_INCREMENT_32   2891336453U
 
+/*
 struct pcg32_state
 {
 	uint state;
 	uint increment;
 };
+*/
 
 void
 pcg32_seed(inout pcg32_state pcg_state, uint seed, uint increment)

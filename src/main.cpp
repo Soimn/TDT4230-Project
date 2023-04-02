@@ -164,19 +164,27 @@ struct State
     int current_resolution_index;
     int backbuffer_width;
     int backbuffer_height;
-    GLuint backbuffer_texture;
-    GLuint accumulated_frames_texture;
     
     GLuint display_vao;
     GLuint display_program;
     
     GLuint compute_program;
+    GLuint backbuffer_texture;
+    GLuint accumulated_frames_texture;
+		GLuint triangle_buffer;
     
     bool should_regen_buffers;
     u32 frame_index;
     
     u64 last_render_timestamp;
     float last_render_time;
+};
+
+struct Triangle
+{
+	float alpha[4];
+	float beta[4];
+	float gamma;
 };
 
 int
@@ -192,7 +200,7 @@ main(int argc, char** argv)
         const char* glsl_version = "#version 450";
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 0);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
         
@@ -242,29 +250,8 @@ main(int argc, char** argv)
                 
                 /// Program setup
                 bool setup_failed = false;
-                {
-                    /// Generate front- and backbuffer textures
-                    {
-                        glActiveTexture(GL_TEXTURE0);
-                        glGenTextures(1, &state.backbuffer_texture);
-                        glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
-                        
-                        glActiveTexture(GL_TEXTURE1);
-                        glGenTextures(1, &state.accumulated_frames_texture);
-                        glBindTexture(GL_TEXTURE_2D, state.accumulated_frames_texture);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
-                    }
-                    
-                    /// Create program and vertex array for displaying frontbuffer on screen
+                { 
+                    /// Create program and vertex array for displaying backbuffer on screen
                     glGenVertexArrays(1, &state.display_vao);
                     state.display_program = glCreateProgram();
                     {
@@ -311,12 +298,78 @@ main(int argc, char** argv)
                         glDeleteShader(vertex_shader);
                         glDeleteShader(fragment_shader);
                     }
+
+                    /// Generate textures
+                    {
+                        glActiveTexture(GL_TEXTURE0);
+                        glGenTextures(1, &state.backbuffer_texture);
+                        glBindTexture(GL_TEXTURE_2D, state.backbuffer_texture);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
+                        
+                        glActiveTexture(GL_TEXTURE1);
+                        glGenTextures(1, &state.accumulated_frames_texture);
+                        glBindTexture(GL_TEXTURE_2D, state.accumulated_frames_texture);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
+                    }
                     
+										/// Create shader buffers for storing scene data
+										{
+											unsigned int triangle_count = 100000;
+											Triangle* triangles = (Triangle*)malloc(sizeof(Triangle)*triangle_count);
+											DEFER(free(triangles));
+
+											float screen_width = 1;
+											float screen_height = 9.0f/16.0f;
+
+											float p[3][3];
+											p[0][0] = -screen_width*2;
+											p[0][1] = -screen_height/2;
+											p[0][2] = 0.5f;
+											p[1][0] = screen_width/2;
+											p[1][1] = -screen_height/2;
+											p[1][2] = 0.5f;
+											p[2][0] = screen_width/2;
+											p[2][1] = screen_height*2;
+											p[2][2] = 0.5f;
+
+											Triangle template_triangle = {};
+											template_triangle.alpha[0] = p[0][0];
+											template_triangle.alpha[1] = p[0][1];
+											template_triangle.alpha[2] = p[0][2];
+											template_triangle.beta[0]  = p[1][0];
+											template_triangle.beta[1]  = p[1][1];
+											template_triangle.beta[2]  = p[1][2];
+
+											template_triangle.alpha[3] = p[2][0];
+											template_triangle.beta[3]  = p[2][1];
+											template_triangle.gamma    = p[2][2];
+
+											for (unsigned int i = 0; i < triangle_count; ++i)
+											{
+												memcpy(&triangles[i], &template_triangle, sizeof(Triangle));
+											}
+
+											glGenBuffers(1, &state.triangle_buffer);
+											glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_buffer);
+											//glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle)*triangle_count, triangles, GL_STATIC_DRAW);
+											glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle)*triangle_count, triangles, 0);
+											glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, state.triangle_buffer);
+											glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+										}
+
                     /// Create compute program for rendering to the backbuffer
                     state.compute_program = glCreateProgram();
                     {
                         FILE* compute_shader_file = fopen("../src/compute_shader.comp", "rb");
-                        FILE* pcg_file = fopen("../vendor/pcg.comp", "rb");
+                        FILE* pcg_file = fopen("../vendor/pcg/pcg.comp", "rb");
                         if (compute_shader_file == 0)
                         {
                             fprintf(stderr, "ERROR: failed to open compute shader file.\n");
@@ -481,7 +534,7 @@ main(int argc, char** argv)
                             glClearTexImage(state.accumulated_frames_texture, 0, GL_RGBA, GL_FLOAT, f);
                             
                             glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT);
-                            
+
                             state.should_regen_buffers = false;
                             state.frame_index          = 0;
                         }
