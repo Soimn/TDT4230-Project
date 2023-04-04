@@ -1,18 +1,31 @@
 #version 450 core
 
-struct Triangle
+struct Triangle_Data
 {
 	vec4 alpha;
 	vec4 beta;
 	vec4 gamma;
 };
 
+struct Triangle_Material_Data
+{
+	vec4 n0uv0x;
+	vec4 n1uv0y;
+	vec4 n2;
+	vec4 uv12;
+};
+
+struct Bounding_Sphere
+{
+	vec4 pr;
+};
+
 layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 layout(rgba32f, binding = 0) restrict writeonly uniform image2D backbuffer;
 layout(rgba32f, binding = 1) restrict uniform image2D accumulated_frames_buffer;
-layout(std140, binding = 2) restrict readonly buffer triangle_buffer {
-	Triangle tris[];
-};
+layout(std140, binding = 2) restrict readonly buffer triangle_data { Triangle_Data tri_data[]; };
+layout(std140, binding = 3) restrict readonly buffer triangle_mat_data { Triangle_Material_Data tri_mat_data[]; };
+layout(std140, binding = 4) restrict readonly buffer bounding_sphere_data { Bounding_Sphere bounding_spheres[]; };
 
 layout(location = 0) uniform uint frame_index;
 layout(location = 1) uniform float fov;
@@ -61,13 +74,6 @@ RandomDirInHemi(vec3 plane_normal)
 	return (dot(dir, plane_normal) < 0 ? -dir : dir);
 }
 
-struct Hit_Data
-{
-	vec3 point;
-	vec2 uv;
-	float t;
-};
-
 // Derived from math presented in the paper "Fast, Minimum Storage Ray/Triangle Intersection" by Möller and Trumbore.
 // https://cadxfem.org/inf/Fast%20MinimumStorage%20RayTriangle%20Intersection.pdf
 bool
@@ -80,12 +86,76 @@ MollerTrumbore(vec3 origin, vec3 ray, vec3 p0, vec3 p1, vec3 p2, bool invert_fac
 	vec3 E_1xE_2 = cross(E_1, E_2);
 	vec3 DxT     = cross(D, T);
 
-	float denominator = dot(-D, E_1xE_2);
+	float denominator = dot(D, -E_1xE_2);
 
 	tuv = vec3(dot(T, E_1xE_2), dot(-E_2, DxT), dot(E_1, DxT)) / denominator;
 
-	bool hit_plane = (invert_faces ? denominator > 0 : denominator < 0);
+	bool hit_plane = (invert_faces ? denominator < 0 : denominator > 0);
 	return (hit_plane && tuv.x > 0 && tuv.y >= 0 && tuv.z >= 0 && tuv.y + tuv.z <= 1);
+}
+
+struct Hit_Data
+{
+	int id;
+	vec3 point;
+	vec3 normal;
+	vec2 uv;
+	vec3 tuv;
+};
+
+Hit_Data
+CastRay(vec3 origin, vec3 ray)
+{
+	Hit_Data result;
+	result.id    = -1;
+	result.tuv.x = 1e9;
+
+	for (int i = 0; i < bounding_spheres.length(); ++i)
+	{
+		vec4 pr = bounding_spheres[i].pr;
+		vec3 p  = pr.xyz;
+		float r = pr.w;
+
+		vec3 op = p - origin;
+		float b = dot(op, ray);
+
+		float discriminant = b*b - dot(op, op) + r*r;
+		if (discriminant < 0) continue;
+
+		vec3 p0 = tri_data[i].alpha.xyz;
+		vec3 p1 = tri_data[i].beta.xyz;
+		vec3 p2 = vec3(tri_data[i].alpha.w, tri_data[i].beta.w, tri_data[i].gamma.x);
+
+		vec3 tuv = vec3(0);
+		if (MollerTrumbore(origin, ray, p0, p1, p2, false, tuv) && tuv.x < result.tuv.x)
+		{
+			result.id  = i;
+			result.tuv = tuv;
+		}
+	}
+
+	if (result.id != -1)
+	{
+		int i = result.id;
+
+		vec2 uv0 = vec2(tri_mat_data[i].n0uv0x.w, tri_mat_data[i].n1uv0y.w);
+		vec2 uv1 = tri_mat_data[i].uv12.xy;
+		vec2 uv2 = tri_mat_data[i].uv12.zw;
+
+		vec3 n0 = tri_mat_data[i].n0uv0x.xyz;
+		vec3 n1 = tri_mat_data[i].n1uv0y.xyz;
+		vec3 n2 = tri_mat_data[i].n2.xyz;
+
+		float lambda_1 = result.tuv.y;
+		float lambda_2 = result.tuv.z;
+		float lambda_3 = 1 - lambda_1 - lambda_2;
+
+		result.point  = origin + result.tuv*ray;
+		result.uv     = lambda_3*uv0 + lambda_1*uv1 + lambda_2*uv2;
+		result.normal = lambda_3*n0 + lambda_1*n1 + lambda_2*n2;
+	}
+
+	return result;
 }
 
 void
@@ -95,39 +165,19 @@ main()
 	uint seed = (invocation_index + frame_index*187272781)*178525871;
 	pcg32_seed(pcg_state, seed, invocation_index);
 
-	float screen_width = 1;
-	float screen_height = 9.0/16.0;
-	float near_plane = 1/(2*tan(fov/2));
+	float near_plane = backbuffer_dim.x/(2*tan(fov/2));
 
-	float screen_dx = screen_width/(gl_NumWorkGroups.x*gl_WorkGroupSize.x);
-	float screen_dy = screen_height/(gl_NumWorkGroups.y*gl_WorkGroupSize.y);
-	vec3 ray = vec3(-screen_width/2 + screen_dx*gl_GlobalInvocationID.x, -screen_height/2 + screen_dy*gl_GlobalInvocationID.y, near_plane);
-	ray += vec3(Random01()*screen_dx, Random01()*screen_dy, 0);
+	vec3 ray = vec3(backbuffer_dim.x/2 - gl_GlobalInvocationID.x, -backbuffer_dim.y/2 + gl_GlobalInvocationID.y, near_plane);
+	ray += vec3(0.5 + 2*(0.33*(Random01()+Random01()+Random01()) - 0.5), 0.5 + 2*(0.33*(Random01()+Random01()+Random01()) - 0.5), 0);
 	ray = normalize(ray);
 
-	int closest_hit_id = -1;
-	vec3 closest_hit_tuv = vec3(1000000, 0, 0);
-	for (int i = 0; i < 1000; ++i)
-	{
-		Triangle t = tris[i];
-		vec4 alpha = t.alpha;
-		vec4 beta = t.beta;
+	Hit_Data hit_data = CastRay(vec3(0), ray);
+	
+	vec3 color = vec3(0);
+	if (hit_data.id != -1) color = vec3(1)*min(1, 0.12 + max(0, dot(hit_data.normal, normalize(vec3(0.7, 1, 0)))));
 
-		vec3 p0 = alpha.xyz;
-		vec3 p1 = beta.xyz;
-		vec3 p2 = vec3(alpha.w, beta.w, tris[i].gamma.x);
-
-		vec3 tuv;
-		if (MollerTrumbore(vec3(0), ray, p0, p1, p2, false, tuv))
-		{
-			if (tuv.x < closest_hit_tuv.x)
-			{
-				closest_hit_id  = i;
-				closest_hit_tuv = tuv;
-			}
-		}
-	}
-
-	if (closest_hit_id == -1) imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(0, 0, 0, 1));
-	else                      imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(vec2(closest_hit_tuv.yz), 0, 1));
+	vec4 accumulated_value = imageLoad(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy));
+	accumulated_value.xyz += color;
+	imageStore(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy), accumulated_value);
+	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(frame_index+1), 1));
 }

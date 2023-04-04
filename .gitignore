@@ -1,2 +1,7 @@
 build/*
 !build/.gitkeep
+misc/*.blend
+misc/*.obj
+misc/*.mtl
+misc/*.blend1
+misc/*.exe

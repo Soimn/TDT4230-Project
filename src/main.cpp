@@ -171,8 +171,9 @@ struct State
     GLuint compute_program;
     GLuint backbuffer_texture;
     GLuint accumulated_frames_texture;
-		GLuint abg_texture;
-		GLuint triangle_buffer;
+		GLuint triangle_data;
+		GLuint triangle_mat_data;
+		GLuint bounding_spheres;
     
     bool should_regen_buffers;
     u32 frame_index;
@@ -181,11 +182,24 @@ struct State
     float last_render_time;
 };
 
-struct Triangle
+struct Triangle_Data
 {
 	float alpha[4];
 	float beta[4];
 	float gamma[4];
+};
+
+struct Triangle_Material_Data
+{
+	float n0uv0x[4];
+	float n1uv0y[4];
+	float n2[4];
+	float uv12[4];
+};
+
+struct Bounding_Sphere
+{
+	float pr[4];
 };
 
 int
@@ -321,56 +335,58 @@ main(int argc, char** argv)
                         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, state.backbuffer_width, state.backbuffer_height, 0, GL_RGBA, GL_FLOAT, 0);
                     }
                     
-										/// Create shader buffers for storing scene data
+										/// Load scene
 										{
-											unsigned int triangle_count = 10000;
-											Triangle* triangles = (Triangle*)malloc(sizeof(Triangle)*triangle_count);
-											DEFER(free(triangles));
+											FILE* scene_file = fopen("../misc/cornellass.scene", "rb");
+											DEFER(fclose(scene_file));
 
-											float* alpha = (float*)malloc(4*sizeof(float)*triangle_count);
-											float* beta = (float*)malloc(4*sizeof(float)*triangle_count);
-											float* gamma = (float*)malloc(4*sizeof(float)*triangle_count);
-											DEFER(free(alpha));
-											DEFER(free(beta));
-											DEFER(free(gamma));
-
-											float screen_width = 1;
-											float screen_height = 9.0f/16.0f;
-
-											float p[3][3];
-											p[0][0] = -screen_width*2;
-											p[0][1] = -screen_height/2;
-											p[0][2] = 0.5f;
-											p[1][0] = screen_width/2;
-											p[1][1] = -screen_height/2;
-											p[1][2] = 0.5f;
-											p[2][0] = screen_width/2;
-											p[2][1] = screen_height*2;
-											p[2][2] = 0.5f;
-
-											Triangle template_triangle = {};
-											template_triangle.alpha[0] = p[0][0];
-											template_triangle.alpha[1] = p[0][1];
-											template_triangle.alpha[2] = p[0][2];
-											template_triangle.beta[0]  = p[1][0];
-											template_triangle.beta[1]  = p[1][1];
-											template_triangle.beta[2]  = p[1][2];
-
-											template_triangle.alpha[3] = p[2][0];
-											template_triangle.beta[3]  = p[2][1];
-											template_triangle.gamma[0] = p[2][2];
-
-											for (unsigned int i = 0; i < triangle_count; ++i)
+											if (scene_file == 0)
 											{
-												memcpy(&triangles[i], &template_triangle, sizeof(Triangle));
+												fprintf(stderr, "ERROR: failed to open scene file.\n");
+												setup_failed = true;
 											}
+											else
+											{
+												fseek(scene_file, 0, SEEK_END);
+												int scene_file_size = ftell(scene_file);
+												rewind(scene_file);
 
-											glGenBuffers(1, &state.triangle_buffer);
-											glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_buffer);
-											//glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle)*triangle_count, triangles, GL_STATIC_DRAW);
-											glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle)*triangle_count, triangles, 0);
-											glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, state.triangle_buffer);
-											glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+												u8* scene_data = (u8*)malloc(scene_file_size + 1);
+												memset(scene_data, 0, scene_file_size + 1);
+												DEFER(free(scene_data));
+
+												if (fread(scene_data, 1, scene_file_size, scene_file) != scene_file_size)
+												{
+													fprintf(stderr, "ERROR: failed to read scene file.\n");
+													setup_failed = true;
+												}
+												else
+												{
+													u32 tri_count = *(u32*)scene_data;
+
+													Triangle_Data* tri_data              = (Triangle_Data*)(scene_data + 4);
+													Triangle_Material_Data* tri_mat_data = (Triangle_Material_Data*)(tri_data + tri_count);
+													Bounding_Sphere* bounding_spheres    = (Bounding_Sphere*)(tri_mat_data + tri_count);
+
+													glGenBuffers(1, &state.triangle_data);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_data);
+													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle_Data)*tri_count, tri_data, 0);
+													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, state.triangle_data);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+													glGenBuffers(1, &state.triangle_mat_data);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_mat_data);
+													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle_Material_Data)*tri_count, tri_mat_data, 0);
+													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, state.triangle_mat_data);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+													glGenBuffers(1, &state.bounding_spheres);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.bounding_spheres);
+													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Bounding_Sphere)*tri_count, bounding_spheres, 0);
+													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, state.bounding_spheres);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+												}
+											}
 										}
 
                     /// Create compute program for rendering to the backbuffer
@@ -378,6 +394,9 @@ main(int argc, char** argv)
                     {
                         FILE* compute_shader_file = fopen("../src/compute_shader.comp", "rb");
                         FILE* pcg_file = fopen("../vendor/pcg/pcg.comp", "rb");
+												DEFER(fclose(compute_shader_file));
+												DEFER(fclose(pcg_file));
+
                         if (compute_shader_file == 0)
                         {
                             fprintf(stderr, "ERROR: failed to open compute shader file.\n");
@@ -400,16 +419,18 @@ main(int argc, char** argv)
                             
                             char* compute_shader_code = (char*)malloc(compute_shader_file_size + 1);
                             memset(compute_shader_code, 0, compute_shader_file_size + 1);
+														DEFER(free(compute_shader_code));
 
                             char* pcg_code = (char*)malloc(pcg_file_size + 1);
                             memset(pcg_code, 0, pcg_file_size + 1);
+														DEFER(free(pcg_code));
                             
-                            if (compute_shader_code == 0 || fread(compute_shader_code, 1, compute_shader_file_size, compute_shader_file) != compute_shader_file_size)
+                            if (fread(compute_shader_code, 1, compute_shader_file_size, compute_shader_file) != compute_shader_file_size)
                             {
                                 fprintf(stderr, "ERROR: failed to read compute shader file.\n");
                                 setup_failed = true;
                             }
-														else if (pcg_code == 0 || fread(pcg_code, 1, pcg_file_size, pcg_file) != pcg_file_size)
+														else if (fread(pcg_code, 1, pcg_file_size, pcg_file) != pcg_file_size)
                             {
                                 fprintf(stderr, "ERROR: failed to read pcg shader file.\n");
                                 setup_failed = true;
@@ -465,9 +486,6 @@ main(int argc, char** argv)
                                     }
                                 } while (0);
                             }
-                            
-                            free(compute_shader_code);
-                            fclose(compute_shader_file);
                         }
                     }
                 }
@@ -550,7 +568,6 @@ main(int argc, char** argv)
                         glUseProgram(state.compute_program);
                         glBindImageTexture(0, state.backbuffer_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
                         glBindImageTexture(1, state.accumulated_frames_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
-                        glBindImageTexture(3, state.abg_texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
                         glUniform1ui(0, state.frame_index);
                         glUniform1f(1, state.fov);
                         glUniform2f(2, (float)state.backbuffer_width, (float)state.backbuffer_height);
