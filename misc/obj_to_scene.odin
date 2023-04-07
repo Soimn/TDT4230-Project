@@ -7,9 +7,9 @@ import "core:strconv";
 import "core:slice";
 import "core:math/linalg";
 
-/*   0 - 4   *                                      *
+/*   0 - 3   *   4 - 7   *   8 - 11     *           *
  *--------------------------------------------------*
- * tri_count *                                      *
+ * tri_count * mat_count *  light_count *           *
  *--------------------------------------------------*
  * triangle intersection data                       *
  * alpha:  p0.x  p0.y  p0.z  p2.x                   *
@@ -25,19 +25,27 @@ import "core:math/linalg";
  * bounding spheres                                 *
  * pr:     p.x   p.y   p.z   r                      *
  *--------------------------------------------------*
+ * materials                                        *
+ * color:  r     g     b     a                      *
+ * kind:   kind                                     *
+ *--------------------------------------------------*
+ * lights                                           *
+ * ids:    id                                       *
+ *--------------------------------------------------*
  */
 
 Triangle :: struct
 {
-	p0: [3]f32,
-	p1: [3]f32,
-	p2: [3]f32,
+	p0:  [3]f32,
+	p1:  [3]f32,
+	p2:  [3]f32,
 	uv0: [2]f32,
 	uv1: [2]f32,
 	uv2: [2]f32,
-	n0: [3]f32,
-	n1: [3]f32,
-	n2: [3]f32,
+	n0:  [3]f32,
+	n1:  [3]f32,
+	n2:  [3]f32,
+	mat: f32,
 }
 
 Triangle_Data :: struct
@@ -73,7 +81,7 @@ Triangle_Material_Data :: struct
 	n2_x: f32,
 	n2_y: f32,
 	n2_z: f32,
-	_pad_0: f32,
+	mat: f32,
 
 	uv1_x: f32,
 	uv1_y: f32,
@@ -88,6 +96,69 @@ Bounding_Sphere :: struct
 	p_z: f32,
 	r:   f32,
 }
+
+Material_Kind :: enum u32
+{
+	Diffuse    = 0,
+	Reflective = 1,
+	Refractive = 2,
+	Light      = 3,
+}
+
+Material :: struct
+{
+	color_r: f32,
+	color_g: f32,
+	color_b: f32,
+	color_a: f32,
+	kind:    Material_Kind,
+	_pad_0: [3]u32,
+}
+
+Materials := [?]Material{
+	0 = Material{
+		color_r = 0.8,
+		color_g = 0.8,
+		color_b = 0.8,
+		color_a = 0,
+		kind    = Material_Kind.Diffuse,
+	},
+	1 = Material{
+		color_r = 0.051991,
+		color_g = 0.252292,
+		color_b = 0.8,
+		color_a = 0,
+		kind    = Material_Kind.Diffuse,
+	},
+	2 = Material{
+		color_r = 0.8,
+		color_g = 0.152912,
+		color_b = 0.072971,
+		color_a = 0,
+		kind    = Material_Kind.Diffuse,
+	},
+	3 = Material{
+		color_r = 1,
+		color_g = 1,
+		color_b = 1,
+		color_a = 20,
+		kind    = Material_Kind.Light,
+	},
+	4 = Material{
+		color_r = 0,
+		color_g = 0,
+		color_b = 0,
+		color_a = 0,
+		kind    = Material_Kind.Reflective,
+	},
+	5 = Material{
+		color_r = 0,
+		color_g = 0,
+		color_b = 0,
+		color_a = 1.52,
+		kind    = Material_Kind.Refractive,
+	},
+};
 
 main :: proc()
 {
@@ -107,48 +178,78 @@ main :: proc()
 	}
 
 	lines := strings.split(obj_file, "\n");
+	assert(len(lines[len(lines)-1]) == 0);
+	lines = lines[:len(lines)-1];
 	
-	vertices := make([dynamic][3]f32);
-	uvs      := make([dynamic][2]f32);
-	normals  := make([dynamic][3]f32);
+	vertices  := make([dynamic][3]f32);
+	uvs       := make([dynamic][2]f32);
+	normals   := make([dynamic][3]f32);
 	triangles := make([dynamic]Triangle);
+	lights    := make([dynamic]u32);
 
-	for line in lines
+	assert(len(lines) > 4);
+	assert(lines[0][0] == '#');
+	assert(lines[1][0] == '#');
+	assert(strings.has_prefix(lines[2], "mtllib"));
+	cursor := 3;
+
+	for cursor < len(lines)
 	{
-		tline := strings.trim_left_space(line);
-		if len(tline) == 0 || tline[0] == '#' do continue
+		assert(strings.has_prefix(lines[cursor], "o "));
+		cursor += 1;
 
-		fields := strings.fields(tline);
-
-		if fields[0] == "v"
+		for ; strings.has_prefix(lines[cursor], "v "); cursor += 1
 		{
+			fields := strings.fields(lines[cursor]);
+
+			assert(len(fields) == 4);
 			x, x_ok := strconv.parse_f32(fields[1]);
 			y, y_ok := strconv.parse_f32(fields[2]);
 			z, z_ok := strconv.parse_f32(fields[3]);
-			assert(x_ok && y_ok && z_ok && len(fields) == 4);
+			assert(x_ok && y_ok && z_ok);
 
 			append(&vertices, [3]f32{x,y,z});
 		}
-		else if fields[0] == "vt"
+
+		for ; strings.has_prefix(lines[cursor], "vt "); cursor += 1
 		{
+			fields := strings.fields(lines[cursor]);
+
+			assert(len(fields) == 3);
 			x, x_ok := strconv.parse_f32(fields[1]);
 			y, y_ok := strconv.parse_f32(fields[2]);
-			assert(x_ok && y_ok && len(fields) == 3);
+			assert(x_ok && y_ok);
 
 			append(&uvs, [2]f32{x,y});
 		}
-		else if fields[0] == "vn"
+
+		for ; strings.has_prefix(lines[cursor], "vn "); cursor += 1
 		{
+			fields := strings.fields(lines[cursor]);
+
+			assert(len(fields) == 4);
 			x, x_ok := strconv.parse_f32(fields[1]);
 			y, y_ok := strconv.parse_f32(fields[2]);
 			z, z_ok := strconv.parse_f32(fields[3]);
-			assert(x_ok && y_ok && z_ok && len(fields) == 4);
+			assert(x_ok && y_ok && z_ok);
 
 			append(&normals, [3]f32{x,y,z});
 		}
-		else if fields[0] == "f"
+
+		assert(strings.has_prefix(lines[cursor], "usemtl mat"));
+		material_id, mat_ok := strconv.parse_int(strings.trim_prefix(lines[cursor], "usemtl mat"));
+		assert(mat_ok);
+		assert(material_id >= 0 && material_id < len(Materials));
+		cursor += 1;
+
+		assert(strings.has_prefix(lines[cursor], "s "));
+		cursor += 1;
+
+		for ; cursor < len(lines) && strings.has_prefix(lines[cursor], "f "); cursor += 1
 		{
 			tri := Triangle{};
+
+			fields := strings.fields(lines[cursor]);
 
 			assert(len(fields) == 4);
 			param0 := strings.split(fields[1], "/");
@@ -176,17 +277,10 @@ main :: proc()
 			parse_param(param1, &tri.p1, &tri.uv1, &tri.n1, vertices[:], uvs[:], normals[:]);
 			parse_param(param2, &tri.p2, &tri.uv2, &tri.n2, vertices[:], uvs[:], normals[:]);
 
+			tri.mat = f32(material_id);
+			if Materials[material_id].kind == .Light do append(&lights, u32(len(triangles)));
+
 			append(&triangles, tri);
-		}
-		else if fields[0] == "usemtl"
-		{
-			if fields[1] == "light_source"
-			{
-			}
-		}
-		else
-		{
-			fmt.println("Ignored:", tline);
 		}
 	}
 
@@ -224,6 +318,7 @@ main :: proc()
 			n2_x  = tri.n2.x,
 			n2_y  = tri.n2.y,
 			n2_z  = tri.n2.z,
+			mat   = tri.mat,
 
 			uv1_x = tri.uv1.x,
 			uv1_y = tri.uv1.y,
@@ -253,12 +348,18 @@ main :: proc()
 
 	scene_builder := strings.builder_make_none();
 
-	tri_count := transmute([4]u8) u32(len(triangles));
+	tri_count   := transmute([4]u8) u32(len(triangles));
+	mat_count   := transmute([4]u8) u32(len(Materials));
+	light_count := transmute([4]u8) u32(len(lights));
 	strings.write_bytes(&scene_builder, tri_count[:]);
+	strings.write_bytes(&scene_builder, mat_count[:]);
+	strings.write_bytes(&scene_builder, light_count[:]);
 
 	strings.write_bytes(&scene_builder, slice.to_bytes(triangle_data[:]));
 	strings.write_bytes(&scene_builder, slice.to_bytes(triangle_material_data[:]));
 	strings.write_bytes(&scene_builder, slice.to_bytes(bounding_spheres[:]));
+	strings.write_bytes(&scene_builder, slice.to_bytes(Materials[:]));
+	strings.write_bytes(&scene_builder, slice.to_bytes(lights[:]));
 
 	strings.write_byte(&scene_builder, 0);
 

@@ -174,6 +174,9 @@ struct State
 		GLuint triangle_data;
 		GLuint triangle_mat_data;
 		GLuint bounding_spheres;
+		GLuint object_data;
+		GLuint material_data;
+		GLuint lights;
     
     bool should_regen_buffers;
     u32 frame_index;
@@ -193,13 +196,20 @@ struct Triangle_Material_Data
 {
 	float n0uv0x[4];
 	float n1uv0y[4];
-	float n2[4];
+	float n2mat[4];
 	float uv12[4];
 };
 
 struct Bounding_Sphere
 {
 	float pr[4];
+};
+
+struct Material
+{
+	float color[4];
+	u32 kind;
+	u32 _pad_0[3];
 };
 
 int
@@ -337,7 +347,7 @@ main(int argc, char** argv)
                     
 										/// Load scene
 										{
-											FILE* scene_file = fopen("../misc/cornellass.scene", "rb");
+											FILE* scene_file = fopen("../misc/cornell.scene", "rb");
 											DEFER(fclose(scene_file));
 
 											if (scene_file == 0)
@@ -362,11 +372,15 @@ main(int argc, char** argv)
 												}
 												else
 												{
-													u32 tri_count = *(u32*)scene_data;
+													u32 tri_count   = ((u32*)scene_data)[0];
+													u32 mat_count   = ((u32*)scene_data)[1];
+													u32 light_count = ((u32*)scene_data)[2];
 
-													Triangle_Data* tri_data              = (Triangle_Data*)(scene_data + 4);
+													Triangle_Data* tri_data              = (Triangle_Data*)(scene_data + 12);
 													Triangle_Material_Data* tri_mat_data = (Triangle_Material_Data*)(tri_data + tri_count);
 													Bounding_Sphere* bounding_spheres    = (Bounding_Sphere*)(tri_mat_data + tri_count);
+													Material* materials                  = (Material*)(bounding_spheres + tri_count);
+													u32* lights                          = (u32*)(materials + mat_count);
 
 													glGenBuffers(1, &state.triangle_data);
 													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_data);
@@ -384,6 +398,18 @@ main(int argc, char** argv)
 													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.bounding_spheres);
 													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Bounding_Sphere)*tri_count, bounding_spheres, 0);
 													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, state.bounding_spheres);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+													glGenBuffers(1, &state.material_data);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.material_data);
+													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Material)*mat_count, materials, 0);
+													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, state.material_data);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+													glGenBuffers(1, &state.lights);
+													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.lights);
+													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(u32)*light_count, lights, 0);
+													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, state.lights);
 													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 												}
 											}

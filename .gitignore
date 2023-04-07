@@ -5,3 +5,5 @@ misc/*.obj
 misc/*.mtl
 misc/*.blend1
 misc/*.exe
+misc/*.tif
+misc/*.pdb
