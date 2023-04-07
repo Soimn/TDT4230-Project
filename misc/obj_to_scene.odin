@@ -17,10 +17,9 @@ import "core:math/linalg";
  * gamma:  p2.z                                     *
  *--------------------------------------------------*
  * triangle material data                           *
- * n0uv0x: n0.x  n0.y  n0.z  uv0.x                  *
- * n1uv0y: n1.x  n1.y  n1.z  uv0.y                  *
- * n2:     n2.x  n2.y  n2.z                         *
- * uv12:   uv1.x uv1.y uv2.x uv2.y                  *
+ * n0n2x:  n0.x  n0.y  n0.z  n2.x                   *
+ * n1b2y:  n1.x  n1.y  n1.z  n2.y                   *
+ * n2zmat: n2.z  mat                                *
  *--------------------------------------------------*
  * bounding spheres                                 *
  * pr:     p.x   p.y   p.z   r                      *
@@ -30,7 +29,10 @@ import "core:math/linalg";
  * kind:   kind                                     *
  *--------------------------------------------------*
  * lights                                           *
- * ids:    id                                       *
+ * p0nx:   p0.x  p0.y  p0.z  n.x                    *
+ * p1ny:   p1.x  p1.y  p1.z  n.y                    *
+ * p2nz:   p2.x  p2.y  p2.z  n.z                    *
+ * areaid: area  id                                 *
  *--------------------------------------------------*
  */
 
@@ -50,17 +52,17 @@ Triangle :: struct
 
 Triangle_Data :: struct
 {
-	p0_x: f32,
-	p0_y: f32,
-	p0_z: f32,
-	p2_x: f32,
+	p0_x:   f32,
+	p0_y:   f32,
+	p0_z:   f32,
+	p2_x:   f32,
 
-	p1_x: f32,
-	p1_y: f32,
-	p1_z: f32,
-	p2_y: f32,
+	p1_x:   f32,
+	p1_y:   f32,
+	p1_z:   f32,
+	p2_y:   f32,
 
-	p2_z: f32,
+	p2_z:   f32,
 	_pad_0: f32,
 	_pad_1: f32,
 	_pad_2: f32,
@@ -68,25 +70,20 @@ Triangle_Data :: struct
 
 Triangle_Material_Data :: struct
 {
-	n0_x: f32,
-	n0_y: f32,
-	n0_z: f32,
-	uv0_x: f32,
+	n0_x:   f32,
+	n0_y:   f32,
+	n0_z:   f32,
+	n2_x:   f32,
 
-	n1_x: f32,
-	n1_y: f32,
-	n1_z: f32,
-	uv0_y: f32,
+	n1_x:   f32,
+	n1_y:   f32,
+	n1_z:   f32,
+	n2_y:   f32,
 
-	n2_x: f32,
-	n2_y: f32,
-	n2_z: f32,
-	mat: f32,
-
-	uv1_x: f32,
-	uv1_y: f32,
-	uv2_x: f32,
-	uv2_y: f32,
+	n2_z:   f32,
+	mat:    f32,
+	_pad_0: f32,
+	_pad_1: f32,
 }
 
 Bounding_Sphere :: struct
@@ -115,6 +112,14 @@ Material :: struct
 	_pad_0: [3]u32,
 }
 
+Light :: struct
+{
+	p0nx: [4]f32,
+	p1ny: [4]f32,
+	p2nz: [4]f32,
+	areaidmat: [4]f32,
+}
+
 Materials := [?]Material{
 	0 = Material{
 		color_r = 0.8,
@@ -141,20 +146,27 @@ Materials := [?]Material{
 		color_r = 1,
 		color_g = 1,
 		color_b = 1,
-		color_a = 20,
+		color_a = 8,
 		kind    = Material_Kind.Light,
 	},
 	4 = Material{
-		color_r = 0,
-		color_g = 0,
-		color_b = 0,
-		color_a = 0,
-		kind    = Material_Kind.Reflective,
+		color_r = 1,
+		color_g = 1,
+		color_b = 1,
+		color_a = 20,
+		kind    = Material_Kind.Light,
 	},
 	5 = Material{
-		color_r = 0,
+		color_r = 1,
+		color_g = 1,
+		color_b = 1,
+		color_a = 1.2,
+		kind    = Material_Kind.Refractive,
+	},
+	6 = Material{
+		color_r = 0.55,
 		color_g = 0,
-		color_b = 0,
+		color_b = 0.55,
 		color_a = 1.52,
 		kind    = Material_Kind.Refractive,
 	},
@@ -185,7 +197,7 @@ main :: proc()
 	uvs       := make([dynamic][2]f32);
 	normals   := make([dynamic][3]f32);
 	triangles := make([dynamic]Triangle);
-	lights    := make([dynamic]u32);
+	lights    := make([dynamic]Light);
 
 	assert(len(lines) > 4);
 	assert(lines[0][0] == '#');
@@ -278,7 +290,6 @@ main :: proc()
 			parse_param(param2, &tri.p2, &tri.uv2, &tri.n2, vertices[:], uvs[:], normals[:]);
 
 			tri.mat = f32(material_id);
-			if Materials[material_id].kind == .Light do append(&lights, u32(len(triangles)));
 
 			append(&triangles, tri);
 		}
@@ -308,22 +319,15 @@ main :: proc()
 			n0_x  = tri.n0.x,
 			n0_y  = tri.n0.y,
 			n0_z  = tri.n0.z,
-			uv0_x = tri.uv0.x,
+			n2_x  = tri.n2.x,
 
 			n1_x  = tri.n1.x,
 			n1_y  = tri.n1.y,
 			n1_z  = tri.n1.z,
-			uv0_y = tri.uv0.y,
-
-			n2_x  = tri.n2.x,
 			n2_y  = tri.n2.y,
+
 			n2_z  = tri.n2.z,
 			mat   = tri.mat,
-
-			uv1_x = tri.uv1.x,
-			uv1_y = tri.uv1.y,
-			uv2_x = tri.uv2.x,
-			uv2_y = tri.uv2.y,
 		};
 
 		a := tri.p0;
@@ -337,6 +341,27 @@ main :: proc()
 			p_z = m.z,
 			r   = max(linalg.vector_length(a-m), max(linalg.vector_length(b-m), linalg.vector_length(c-m))),
 		};
+
+		if Materials[int(tri.mat)].kind == .Light
+		{
+			id := len(triangle_data);
+
+			e1 := tri.p1 - tri.p0;
+			e2 := tri.p2 - tri.p0;
+
+			scaled_normal := linalg.vector_cross3(e1, e2);
+			area   := linalg.vector_length(scaled_normal);
+			normal := linalg.vector_normalize(scaled_normal);
+
+			light := Light{
+				p0nx      = [4]f32{tri.p0.x, tri.p0.y, tri.p0.z, normal.x},
+				p1ny      = [4]f32{tri.p1.x, tri.p1.y, tri.p1.z, normal.y},
+				p2nz      = [4]f32{tri.p2.x, tri.p2.y, tri.p2.z, normal.z},
+				areaidmat = [4]f32{area, f32(id), tri.mat, 0},
+			};
+
+			append(&lights, light);
+		}
 
 		append(&triangle_data, tri_data);
 		append(&triangle_material_data, tri_mat);

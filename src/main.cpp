@@ -194,10 +194,9 @@ struct Triangle_Data
 
 struct Triangle_Material_Data
 {
-	float n0uv0x[4];
-	float n1uv0y[4];
-	float n2mat[4];
-	float uv12[4];
+	float n0n2x[4];
+	float n1n2y[4];
+	float n2zmat[4];
 };
 
 struct Bounding_Sphere
@@ -210,6 +209,14 @@ struct Material
 	float color[4];
 	u32 kind;
 	u32 _pad_0[3];
+};
+
+struct Light
+{
+  float p0nx[4];
+  float p1ny[4];
+  float p2nz[4];
+  float areaidmat[4];
 };
 
 int
@@ -380,7 +387,7 @@ main(int argc, char** argv)
 													Triangle_Material_Data* tri_mat_data = (Triangle_Material_Data*)(tri_data + tri_count);
 													Bounding_Sphere* bounding_spheres    = (Bounding_Sphere*)(tri_mat_data + tri_count);
 													Material* materials                  = (Material*)(bounding_spheres + tri_count);
-													u32* lights                          = (u32*)(materials + mat_count);
+													Light* lights                        = (Light*)(materials + mat_count);
 
 													glGenBuffers(1, &state.triangle_data);
 													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_data);
@@ -408,7 +415,7 @@ main(int argc, char** argv)
 
 													glGenBuffers(1, &state.lights);
 													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.lights);
-													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(u32)*light_count, lights, 0);
+													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Light)*light_count, lights, 0);
 													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, state.lights);
 													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 												}
