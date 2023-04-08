@@ -146,7 +146,7 @@ Materials := [?]Material{
 		color_r = 1,
 		color_g = 1,
 		color_b = 1,
-		color_a = 80,
+		color_a = 100,
 		kind    = Material_Kind.Light,
 	},
 	4 = Material{

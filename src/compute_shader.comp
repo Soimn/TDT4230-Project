@@ -199,7 +199,16 @@ main()
 	ray += vec3(-Random01(), Random01(), 0);
 	ray = normalize(ray);
 
-  vec3 origin           = vec3(0);
+  // NOTE: https://rh8liuqy.github.io/Uniform_Disk.html
+  vec3 origin;
+  {
+    float u1 = Random01();
+    float u2 = Random01();
+    float r  = 0;
+
+    origin = r*sqrt(u2)*vec3(cos(TAU32*u1), sin(TAU32*u1), 0);
+  }
+
   vec3 color            = vec3(0);
   vec3 multiplier       = vec3(1);
   bool is_reflected     = false;
@@ -220,15 +229,15 @@ main()
 
       if (material.kind == MaterialKind_Light)
       {
-        if (bounce_index == 0 || is_reflected || has_transmitted) color += multiplier*material.color.xyz*material.color.w;
-        //color += multiplier*material.color.xyz*material.color.w;
+        //if (bounce_index == 0 || is_reflected || has_transmitted) color += multiplier*material.color.xyz*material.color.w;
+        color += multiplier*material.color.xyz*material.color.w;
         break;
       }
       else if (material.kind == MaterialKind_Diffuse)
       {
         vec3 new_ray = CosineWeightedRandomDirInHemi(hit_data.normal);
 
-        Light light = lights[clamp(int(Random01()*lights.length()), 0, lights.length()-1)];
+        /*Light light = lights[clamp(int(Random01()*lights.length()), 0, lights.length()-1)];
 
         float light_r1 = sqrt(Random01());
         float light_r2 = Random01();
@@ -250,7 +259,7 @@ main()
           float res_pdf = (light_area*dot(-to_light_n, light_normal))/dot(to_light, to_light);
 
           color += multiplier*material.color.xyz*(1/PI32)*light_intensity*dot(to_light_n, hit_data.normal)*res_pdf;
-        }
+        }*/
 
         multiplier *= material.color.xyz;
 
@@ -276,7 +285,9 @@ main()
       {
         float ior = material.color.w;
 
-        ior = vec3(1.7660, 1.7717, 1.7776)[color_i];
+        //ior = vec3(1.7660, 1.7717, 1.7776)[color_i]; // - sapphire
+        ior = vec3(5.4969, 4.9194, 4.1141)[color_i]; // - germanium
+        //ior = vec3(2.4107, 2.4250, 2.4349)[color_i]; // - diamond
 
 
         // NOTE: https://en.wikipedia.org/wiki/Schlick%27s_approximation
@@ -322,7 +333,7 @@ main()
           is_transmitted  = !is_transmitted;
           has_transmitted = !is_transmitted;
 
-          multiplier *= material.color.xyz*vec3(0.75, 0.73, 1);
+          multiplier *= material.color.xyz;
         }
 
         origin = new_origin;
