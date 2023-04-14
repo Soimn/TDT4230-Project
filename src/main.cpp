@@ -171,6 +171,8 @@ struct State
     int backbuffer_width;
     int backbuffer_height;
 		char* current_scene;
+		int number_of_bounces;
+		bool enable_dispersion;
     
     GLuint display_vao;
     GLuint display_program;
@@ -371,6 +373,8 @@ main(int argc, char** argv)
                 State state = {};
                 state.current_resolution_index = 5;
 								state.current_scene            = SceneNames[0];
+								state.number_of_bounces        = 4;
+								state.enable_dispersion        = false;
                 state.backbuffer_width         = Resolutions[state.current_resolution_index][0];
                 state.backbuffer_height        = Resolutions[state.current_resolution_index][1];
                 state.should_regen_buffers     = true;
@@ -618,6 +622,16 @@ main(int argc, char** argv)
                             ImGui::EndCombo();
                         }
                         
+												if (ImGui::SliderInt("Number of bounces", &state.number_of_bounces, 1, 15))
+												{
+													state.should_regen_buffers = true;
+												}
+
+												if (ImGui::Checkbox("Enable dispersion", &state.enable_dispersion))
+												{
+													state.should_regen_buffers = true;
+												}
+
                         ImGui::Text("last render time: %.2f ms", state.last_render_time);
                         ImGui::End();
                         
@@ -648,6 +662,8 @@ main(int argc, char** argv)
                         glBindImageTexture(1, state.accumulated_frames_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
                         glUniform1ui(0, state.frame_index);
                         glUniform2f(1, (float)state.backbuffer_width, (float)state.backbuffer_height);
+												glUniform1ui(2, (unsigned int)state.number_of_bounces);
+												glUniform1ui(3, state.enable_dispersion);
                         
                         GLuint num_work_groups_x = state.backbuffer_width/16  + (state.backbuffer_width%16 != 0);
                         GLuint num_work_groups_y = state.backbuffer_height/16 + (state.backbuffer_height%16 != 0);

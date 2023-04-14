@@ -50,6 +50,8 @@ layout(std140,  binding = 6) restrict readonly buffer light_data           { Lig
 
 layout(location = 0) uniform uint frame_index;
 layout(location = 1) uniform vec2 backbuffer_dim;
+layout(location = 2) uniform uint number_of_bounces;
+layout(location = 3) uniform bool enable_dispersion;
 
 #define PI32  3.1415926535
 #define TAU32 6.2831853071
@@ -160,15 +162,18 @@ CastRay(vec3 origin, vec3 ray, bool invert_faces)
 		//       higher counts. Ideally this would be a kd-tree (or some other space partition or bvh) traversal instead, but I didn't
 		//       find a good way of doing stackless traversal that used a low amount of memory (touching memory seems to be more expensive
 		//       on the gpu than cpu from the tests I have run, which is why I cram everything into vectors).
-		vec4 pr = bounding_spheres[i].p_r;
-		vec3 p  = pr.xyz;
-		float r = pr.w;
+		if (!invert_faces)
+		{
+			vec4 pr = bounding_spheres[i].p_r;
+			vec3 p  = pr.xyz;
+			float r = pr.w;
 
-		vec3 op = p - origin;
-		float b = dot(op, ray);
+			vec3 op = p - origin;
+			float b = dot(op, ray);
 
-		float discriminant = b*b - dot(op, op) + r*r;
-		if (discriminant < 0) continue;
+			float discriminant = b*b - dot(op, op) + r*r;
+			if (discriminant < 0) continue;
+		}
 
 		vec3 p0 = tri_data[i].p0_p2x.xyz;
 		vec3 p1 = tri_data[i].p1_p2y.xyz;
@@ -219,8 +224,15 @@ CastRay(vec3 origin, vec3 ray, bool invert_faces)
 }
 
 void
-PathTracing(uint bounce_count)
+PathTracing()
 {
+	uint adjusted_frame_index = (enable_dispersion ? frame_index/3 : frame_index);
+	uint dispersion_index     = (enable_dispersion ? frame_index%3 : 0);
+
+	uint invocation_index = gl_GlobalInvocationID.y*gl_NumWorkGroups.x*gl_WorkGroupSize.x + gl_GlobalInvocationID.x;
+	uint seed = (invocation_index + adjusted_frame_index*187272781)*178525871;
+	pcg32_seed(pcg_state, seed, invocation_index);
+
 	vec3 origin           = vec3(0);
 	float near_plane      = backbuffer_dim.x/2;
 	float gaussian_radius = 2;
@@ -231,15 +243,15 @@ PathTracing(uint bounce_count)
   vec3 color      = vec3(0);
   vec3 multiplier = vec3(1);
 
-	uint color_i = clamp(int(Random01()*3), 0, 2);
-	vec3 color_mask = vec3(0);
-	color_mask[color_i] = 1;
-
 	bool is_transmitted = false;
-	for (uint bounce = 0; bounce < bounce_count; ++bounce)
+	for (uint bounce = 0; bounce < number_of_bounces; ++bounce)
 	{
 		Hit_Data hit = CastRay(origin, ray, is_transmitted);
-		if (hit.id == -1) break;
+		if (hit.id == -1)
+		{
+			color = vec3(1, 0, 1);
+			break;
+		}
 		else
 		{
 			vec3 new_origin = hit.point + hit.normal*0.001;
@@ -260,7 +272,7 @@ PathTracing(uint bounce_count)
 			}
 			else if (hit_material.kind == MaterialKind_Refractive)
 			{
-				float ior = hit_material.color.xyz[color_i];
+				float ior = hit_material.color.xyz[dispersion_index];
 
         // NOTE: https://en.wikipedia.org/wiki/Schlick%27s_approximation
         //       https://blog.demofox.org/2017/01/09/raytracing-reflection-refraction-fresnel-total-internal-reflection-and-beers-law/
@@ -292,13 +304,13 @@ PathTracing(uint bounce_count)
         if (Random01() <= r)
         {
           new_ray = reflect(ray, hit.normal);
-          is_transmitted  = false;
+          is_transmitted = is_transmitted;
         }
         else
         {
           new_ray = refract(ray, hit.normal, n1/n2);
 
-          is_transmitted  = !is_transmitted;
+          is_transmitted = !is_transmitted;
         }
 
         origin = new_origin;
@@ -316,20 +328,21 @@ PathTracing(uint bounce_count)
 		}
 	}
 
-	color *= color_mask;
+	if (enable_dispersion)
+	{
+		vec3 color_mask = vec3(0);
+		color_mask[dispersion_index] = 1;
+		color *= color_mask;
+	}
 
 	vec4 accumulated_value = imageLoad(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy));
 	accumulated_value.xyz += color;
 	imageStore(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy), accumulated_value);
-	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(frame_index+1), 1));
+	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(adjusted_frame_index+1), 1));
 }
 
 void
 main()
 {
-	uint invocation_index = gl_GlobalInvocationID.y*gl_NumWorkGroups.x*gl_WorkGroupSize.x + gl_GlobalInvocationID.x;
-	uint seed = (invocation_index + frame_index*187272781)*178525871;
-	pcg32_seed(pcg_state, seed, invocation_index);
-
-	PathTracing(5);
+	PathTracing();
 }
