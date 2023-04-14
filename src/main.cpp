@@ -173,6 +173,7 @@ struct State
 		char* current_scene;
 		int number_of_bounces;
 		bool enable_dispersion;
+		bool enable_bidirectional_tracing;
     
     GLuint display_vao;
     GLuint display_program;
@@ -627,7 +628,12 @@ main(int argc, char** argv)
 													state.should_regen_buffers = true;
 												}
 
-												if (ImGui::Checkbox("Enable dispersion", &state.enable_dispersion))
+												if (ImGui::Checkbox("Enable dispersion (warning, flashing lights)", &state.enable_dispersion))
+												{
+													state.should_regen_buffers = true;
+												}
+
+												if (ImGui::Checkbox("Enable bidirectional tracing", &state.enable_bidirectional_tracing))
 												{
 													state.should_regen_buffers = true;
 												}
@@ -664,6 +670,7 @@ main(int argc, char** argv)
                         glUniform2f(1, (float)state.backbuffer_width, (float)state.backbuffer_height);
 												glUniform1ui(2, (unsigned int)state.number_of_bounces);
 												glUniform1ui(3, state.enable_dispersion);
+												glUniform1ui(4, state.enable_bidirectional_tracing);
                         
                         GLuint num_work_groups_x = state.backbuffer_width/16  + (state.backbuffer_width%16 != 0);
                         GLuint num_work_groups_y = state.backbuffer_height/16 + (state.backbuffer_height%16 != 0);

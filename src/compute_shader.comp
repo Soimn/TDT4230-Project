@@ -52,6 +52,7 @@ layout(location = 0) uniform uint frame_index;
 layout(location = 1) uniform vec2 backbuffer_dim;
 layout(location = 2) uniform uint number_of_bounces;
 layout(location = 3) uniform bool enable_dispersion;
+layout(location = 4) uniform bool enable_bidirectional_tracing;
 
 #define PI32  3.1415926535
 #define TAU32 6.2831853071
@@ -244,6 +245,7 @@ PathTracing()
   vec3 multiplier = vec3(1);
 
 	bool is_transmitted = false;
+	bool is_diffuse     = false;
 	for (uint bounce = 0; bounce < number_of_bounces; ++bounce)
 	{
 		Hit_Data hit = CastRay(origin, ray, is_transmitted);
@@ -260,12 +262,13 @@ PathTracing()
 
 			if (hit_material.kind == MaterialKind_Light)
 			{
-				color += multiplier*hit_material.color.xyz*hit_material.color.w;
+				if (bounce == 0 || enable_dispersion || !is_diffuse) color += multiplier*hit_material.color.xyz*hit_material.color.w;
 				break;
 			}
 			else if (hit_material.kind == MaterialKind_Reflective)
 			{
 				is_transmitted = false;
+				is_diffuse     = false;
 
 				origin = new_origin;
 				ray    = reflect(ray, hit.normal);
@@ -305,12 +308,14 @@ PathTracing()
         {
           new_ray = reflect(ray, hit.normal);
           is_transmitted = is_transmitted;
+					is_diffuse     = false;
         }
         else
         {
           new_ray = refract(ray, hit.normal, n1/n2);
 
           is_transmitted = !is_transmitted;
+					is_diffuse     = false;
         }
 
         origin = new_origin;
@@ -318,9 +323,184 @@ PathTracing()
 			}
 			else
 			{
+				if (!enable_dispersion) // NOTE: next event estimation causes flashing colors when used with dispersion
+				{
+					Light light = lights[clamp(int(Random01()*lights.length()), 0, lights.length()-1)];
+
+					float light_r1 = sqrt(Random01());
+					float light_r2 = Random01();
+
+					// NOTE: from section 4.2 of https://www.cs.princeton.edu/~funk/tog02.pdf
+					vec3 light_p = (1 - light_r1)*light.p0_nx.xyz + (light_r1*(1-light_r2))*light.p1_ny.xyz + (light_r1*light_r2)*light.p2_nz.xyz;
+
+					vec3 to_light   = light_p - hit.point;
+					vec3 to_light_n = normalize(to_light);
+
+					if (CastRay(new_origin, to_light_n, false).id == int(light.area_id_mat.y))
+					{
+						Material light_material = materials[int(light.area_id_mat.z)];
+
+						vec3 light_normal    = vec3(light.p0_nx.w, light.p1_ny.w, light.p2_nz.w);
+						float light_area     = light.area_id_mat.x;
+						vec3 light_intensity = light_material.color.xyz*light_material.color.w;
+
+						float res_pdf = (light_area*dot(-to_light_n, light_normal))/dot(to_light, to_light);
+
+						color += multiplier*(hit_material.color.xyz/PI32)*light_intensity*dot(to_light_n, hit.normal)*res_pdf;
+					}
+				}
+
 				multiplier *= hit_material.color.xyz;
 
 				is_transmitted = false;
+				is_diffuse     = true;
+
+				origin = new_origin;
+				ray    = CosineWeightedRandomDirInHemi(hit.normal);
+			}
+		}
+	}
+
+	if (enable_dispersion)
+	{
+		vec3 color_mask = vec3(0);
+		color_mask[dispersion_index] = 1;
+		color *= color_mask;
+	}
+
+	vec4 accumulated_value = imageLoad(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy));
+	accumulated_value.xyz += color;
+	imageStore(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy), accumulated_value);
+	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(adjusted_frame_index+1), 1));
+}
+
+void
+BidirectionalPathTracing()
+{
+	uint adjusted_frame_index = (enable_dispersion ? frame_index/3 : frame_index);
+	uint dispersion_index     = (enable_dispersion ? frame_index%3 : 0);
+
+	uint invocation_index = gl_GlobalInvocationID.y*gl_NumWorkGroups.x*gl_WorkGroupSize.x + gl_GlobalInvocationID.x;
+	uint seed = (invocation_index + adjusted_frame_index*187272781)*178525871;
+	pcg32_seed(pcg_state, seed, invocation_index);
+
+	vec3 origin           = vec3(0);
+	float near_plane      = backbuffer_dim.x/2;
+	float gaussian_radius = 2;
+	vec3 ray = vec3(backbuffer_dim.x/2 - gl_GlobalInvocationID.x, -backbuffer_dim.y/2 + gl_GlobalInvocationID.y, near_plane);
+	ray += gaussian_radius*(2*vec3(Random01() + Random01() + Random01(), Random01() + Random01() + Random01(), 0)/3 - vec3(1));
+	ray = normalize(ray);
+
+  vec3 color      = vec3(0);
+  vec3 multiplier = vec3(1);
+
+	bool is_transmitted = false;
+	bool is_diffuse     = false;
+	for (uint bounce = 0; bounce < number_of_bounces; ++bounce)
+	{
+		Hit_Data hit = CastRay(origin, ray, is_transmitted);
+		if (hit.id == -1)
+		{
+			color = vec3(1, 0, 1);
+			break;
+		}
+		else
+		{
+			vec3 new_origin = hit.point + hit.normal*0.001;
+
+			Material hit_material = materials[hit.material_id];
+
+			if (hit_material.kind == MaterialKind_Light)
+			{
+				if (bounce == 0 || !is_diffuse) color += multiplier*hit_material.color.xyz*hit_material.color.w;
+				break;
+			}
+			else if (hit_material.kind == MaterialKind_Reflective)
+			{
+				is_transmitted = false;
+				is_diffuse     = false;
+
+				origin = new_origin;
+				ray    = reflect(ray, hit.normal);
+			}
+			else if (hit_material.kind == MaterialKind_Refractive)
+			{
+				float ior = hit_material.color.xyz[dispersion_index];
+
+        // NOTE: https://en.wikipedia.org/wiki/Schlick%27s_approximation
+        //       https://blog.demofox.org/2017/01/09/raytracing-reflection-refraction-fresnel-total-internal-reflection-and-beers-law/
+        //       https://graphics.stanford.edu/courses/cs148-10-summer/docs/2006--degreve--reflection_refraction.pdf
+
+        float n1 = AIR_IOR;
+        float n2 = ior;
+        if (is_transmitted)
+        {
+          n1 = ior;
+          n2 = AIR_IOR;
+        }
+
+        float n              = n1/n2;
+        float cos_theta_i    = dot(-ray, hit.normal);
+        float sin_sq_theta_t = n*n*(1 - cos_theta_i*cos_theta_i);
+        float cos_theta_t    = sqrt(1 - sin_sq_theta_t);
+
+        float r = 1;
+        if (sin_sq_theta_t <= 1)
+        {
+          float r_s = (n1*cos_theta_i - n2*cos_theta_t)/(n1*cos_theta_i + n2*cos_theta_t);
+          float r_p = (n2*cos_theta_i - n1*cos_theta_t)/(n2*cos_theta_i + n1*cos_theta_t);
+
+          r = (r_s*r_s + r_p*r_p)/2;
+        }
+
+        vec3 new_ray;
+        if (Random01() <= r)
+        {
+          new_ray = reflect(ray, hit.normal);
+          is_transmitted = is_transmitted;
+					is_diffuse     = false;
+        }
+        else
+        {
+          new_ray = refract(ray, hit.normal, n1/n2);
+
+          is_transmitted = !is_transmitted;
+					is_diffuse     = false;
+        }
+
+        origin = new_origin;
+        ray    = new_ray;
+			}
+			else
+			{
+				Light light = lights[clamp(int(Random01()*lights.length()), 0, lights.length()-1)];
+
+        float light_r1 = sqrt(Random01());
+        float light_r2 = Random01();
+
+        // NOTE: from section 4.2 of https://www.cs.princeton.edu/~funk/tog02.pdf
+        vec3 light_p = (1 - light_r1)*light.p0_nx.xyz + (light_r1*(1-light_r2))*light.p1_ny.xyz + (light_r1*light_r2)*light.p2_nz.xyz;
+
+        vec3 to_light   = light_p - hit.point;
+        vec3 to_light_n = normalize(to_light);
+
+        if (CastRay(new_origin, to_light_n, false).id == int(light.area_id_mat.y))
+        {
+          Material light_material = materials[int(light.area_id_mat.z)];
+
+          vec3 light_normal    = vec3(light.p0_nx.w, light.p1_ny.w, light.p2_nz.w);
+          float light_area     = light.area_id_mat.x;
+          vec3 light_intensity = light_material.color.xyz*light_material.color.w;
+
+          float res_pdf = (light_area*dot(-to_light_n, light_normal))/dot(to_light, to_light);
+
+          color += multiplier*(hit_material.color.xyz/PI32)*light_intensity*dot(to_light_n, hit.normal)*res_pdf;
+        }
+
+				multiplier *= hit_material.color.xyz;
+
+				is_transmitted = false;
+				is_diffuse     = true;
 
 				origin = new_origin;
 				ray    = CosineWeightedRandomDirInHemi(hit.normal);
@@ -344,5 +524,6 @@ PathTracing()
 void
 main()
 {
-	PathTracing();
+	if (enable_bidirectional_tracing) BidirectionalPathTracing();
+	else                              PathTracing();
 }
