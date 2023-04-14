@@ -146,15 +146,15 @@ Materials := [?]Material{
 		color_r = 1,
 		color_g = 1,
 		color_b = 1,
-		color_a = 100,
+		color_a = 10,
 		kind    = Material_Kind.Light,
 	},
 	4 = Material{
-		color_r = 1,
-		color_g = 1,
-		color_b = 1,
-		color_a = 80,
-		kind    = Material_Kind.Light,
+		color_r = 0,
+		color_g = 0,
+		color_b = 0,
+		color_a = 0,
+		kind    = Material_Kind.Reflective,
 	},
 	5 = Material{
 		color_r = 1,
@@ -271,12 +271,18 @@ main :: proc()
 
 			parse_param :: proc(param: []string, p: ^[3]f32, uv: ^[2]f32, n: ^[3]f32, vertices: [][3]f32, uvs: [][2]f32, normals: [][3]f32)
 			{
-				p_index,  p_ok  := strconv.parse_int(param[0], 10);
-				uv_index, uv_ok := strconv.parse_int(param[1], 10);
-				n_index,  n_ok  := strconv.parse_int(param[2], 10);
+				p_index,  p_ok := strconv.parse_int(param[0], 10);
+
+				uv_index := 1;
+				uv_ok    := true;
+				if len(param[1]) != 0 do uv_index, uv_ok = strconv.parse_int(param[1], 10);
+
+				n_index,  n_ok := strconv.parse_int(param[2], 10);
+
 				p_index  -= 1;
 				uv_index -= 1;
 				n_index  -= 1;
+
 				assert(p_ok && uv_ok && n_ok);
 				assert(p_index >= 0 && uv_index >= 0 && n_index >= 0);
 

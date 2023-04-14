@@ -1,30 +1,32 @@
 #version 450 core
 
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
 struct Triangle_Data
 {
-	vec4 alpha;
-	vec4 beta;
-	vec4 gamma;
+	vec4 p0_p2x;
+	vec4 p1_p2y;
+	vec4 p2z;
 };
 
 struct Triangle_Material_Data
 {
-	vec4 n0n2x;
-	vec4 n1n2y;
-	vec4 n2zmat;
+	vec4 n0_n2x;
+	vec4 n1_n2y;
+	vec4 n2z_mat;
 };
 
 struct Bounding_Sphere
 {
-	vec4 pr;
+	vec4 p_r;
 };
 
 struct Light
 {
-  vec4 p0nx;
-  vec4 p1ny;
-  vec4 p2nz;
-  vec4 areaidmat;
+  vec4 p0_nx;
+  vec4 p1_ny;
+  vec4 p2_nz;
+  vec4 area_id_mat;
 };
 
 #define MaterialKind_Diffuse    0
@@ -38,19 +40,16 @@ struct Material
 	uint kind;
 };
 
-layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 layout(rgba32f, binding = 0) restrict writeonly uniform image2D backbuffer;
 layout(rgba32f, binding = 1) restrict uniform image2D accumulated_frames_buffer;
-layout(std140, binding = 2) restrict readonly buffer triangle_data { Triangle_Data tri_data[]; };
-layout(std140, binding = 3) restrict readonly buffer triangle_mat_data { Triangle_Material_Data tri_mat_data[]; };
-layout(std140, binding = 4) restrict readonly buffer bounding_sphere_data { Bounding_Sphere bounding_spheres[]; };
-
-layout(std140, binding = 6) restrict readonly buffer material_data { Material materials[]; };
-layout(std140, binding = 7) restrict readonly buffer light_data { Light lights[]; };
+layout(std140,  binding = 2) restrict readonly buffer triangle_data        { Triangle_Data tri_data[];              };
+layout(std140,  binding = 3) restrict readonly buffer triangle_mat_data    { Triangle_Material_Data tri_mat_data[]; };
+layout(std140,  binding = 4) restrict readonly buffer bounding_sphere_data { Bounding_Sphere bounding_spheres[];    };
+layout(std140,  binding = 5) restrict readonly buffer material_data        { Material materials[];                  };
+layout(std140,  binding = 6) restrict readonly buffer light_data           { Light lights[];                        };
 
 layout(location = 0) uniform uint frame_index;
-layout(location = 1) uniform float fov;
-layout(location = 2) uniform vec2 backbuffer_dim;
+layout(location = 1) uniform vec2 backbuffer_dim;
 
 #define PI32  3.1415926535
 #define TAU32 6.2831853071
@@ -123,7 +122,7 @@ CastRay(vec3 origin, vec3 ray, bool invert_faces)
 
 	for (int i = 0; i < bounding_spheres.length(); ++i)
 	{
-		vec4 pr = bounding_spheres[i].pr;
+		vec4 pr = bounding_spheres[i].p_r;
 		vec3 p  = pr.xyz;
 		float r = pr.w;
 
@@ -133,9 +132,9 @@ CastRay(vec3 origin, vec3 ray, bool invert_faces)
 		float discriminant = b*b - dot(op, op) + r*r;
 		if (discriminant < 0) continue;
 
-		vec3 p0 = tri_data[i].alpha.xyz;
-		vec3 p1 = tri_data[i].beta.xyz;
-		vec3 p2 = vec3(tri_data[i].alpha.w, tri_data[i].beta.w, tri_data[i].gamma.x);
+		vec3 p0 = tri_data[i].p0_p2x.xyz;
+		vec3 p1 = tri_data[i].p1_p2y.xyz;
+		vec3 p2 = vec3(tri_data[i].p0_p2x.w, tri_data[i].p1_p2y.w, tri_data[i].p2z.x);
 
     // Derived from math presented in the paper "Fast, Minimum Storage Ray/Triangle Intersection" by Möller and Trumbore.
     // https://cadxfem.org/inf/Fast%20MinimumStorage%20RayTriangle%20Intersection.pdf
@@ -162,9 +161,9 @@ CastRay(vec3 origin, vec3 ray, bool invert_faces)
 	{
 		int i = result.id;
 
-		vec3 n0 = tri_mat_data[i].n0n2x.xyz;
-		vec3 n1 = tri_mat_data[i].n1n2y.xyz;
-		vec3 n2 = vec3(tri_mat_data[i].n0n2x.w, tri_mat_data[i].n1n2y.w, tri_mat_data[i].n2zmat.x);
+		vec3 n0 = tri_mat_data[i].n0_n2x.xyz;
+		vec3 n1 = tri_mat_data[i].n1_n2y.xyz;
+		vec3 n2 = vec3(tri_mat_data[i].n0_n2x.w, tri_mat_data[i].n1_n2y.w, tri_mat_data[i].n2z_mat.x);
 
 		float lambda_1 = closest_tuv.y;
 		float lambda_2 = closest_tuv.z;
@@ -172,18 +171,12 @@ CastRay(vec3 origin, vec3 ray, bool invert_faces)
 
 		result.point       = origin + closest_tuv.x*ray;
 		result.normal      = lambda_3*n0 + lambda_1*n1 + lambda_2*n2;
-		result.material_id = int(tri_mat_data[i].n2zmat.y);
+		result.material_id = int(tri_mat_data[i].n2z_mat.y);
 
 		if (invert_faces) result.normal = -result.normal;
 	}
 
 	return result;
-}
-
-bool
-CastShadowRay(vec3 origin, vec3 ray, int light_id)
-{
-  return (CastRay(origin, ray, false).id == light_id);
 }
 
 void
@@ -193,159 +186,41 @@ main()
 	uint seed = (invocation_index + frame_index*187272781)*178525871;
 	pcg32_seed(pcg_state, seed, invocation_index);
 
-	float near_plane = backbuffer_dim.x/(2*tan(fov/2));
-
+	vec3 origin           = vec3(0);
+	float near_plane      = backbuffer_dim.x/2;
+	float gaussian_radius = 2;
 	vec3 ray = vec3(backbuffer_dim.x/2 - gl_GlobalInvocationID.x, -backbuffer_dim.y/2 + gl_GlobalInvocationID.y, near_plane);
-	ray += vec3(-Random01(), Random01(), 0);
+	ray += gaussian_radius*(2*vec3(Random01() + Random01() + Random01(), Random01() + Random01() + Random01(), 0)/3 - vec3(1));
 	ray = normalize(ray);
 
-  // NOTE: https://rh8liuqy.github.io/Uniform_Disk.html
-  vec3 origin;
-  {
-    float u1 = Random01();
-    float u2 = Random01();
-    float r  = 0;
+  vec3 color      = vec3(0);
+  vec3 multiplier = vec3(1);
 
-    origin = r*sqrt(u2)*vec3(cos(TAU32*u1), sin(TAU32*u1), 0);
-  }
+	for (uint bounce = 0; bounce < 6; ++bounce)
+	{
+		Hit_Data hit = CastRay(origin, ray, false);
+		if (hit.id == -1) break;
+		else
+		{
+			Material hit_material = materials[hit.material_id];
 
-  vec3 color            = vec3(0);
-  vec3 multiplier       = vec3(1);
-  bool is_reflected     = false;
-  bool is_transmitted   = false;
-  bool has_transmitted  = false;
-  // NOTE: splitting into channels idea from http://mentis.ca/design/graphics/dispersion/
-  int color_i = clamp(int(Random01()*3), 0, 2);
-  vec3 color_mask = vec3(0);
-  color_mask[color_i] = 1;
-  for (uint bounce_index = 0; bounce_index < 12; ++bounce_index)
-  {
-    Hit_Data hit_data = CastRay(origin, ray, is_transmitted);
-    if (hit_data.id != -1)
-    {
-      vec3 new_origin = hit_data.point + hit_data.normal*0.001;
+			if (hit_material.kind == MaterialKind_Light)
+			{
+				color += multiplier*hit_material.color.xyz*hit_material.color.w;
+				break;
+			}
+			else
+			{
+				multiplier *= hit_material.color.xyz;
 
-      Material material = materials[hit_data.material_id];
-
-      if (material.kind == MaterialKind_Light)
-      {
-        //if (bounce_index == 0 || is_reflected || has_transmitted) color += multiplier*material.color.xyz*material.color.w;
-        color += multiplier*material.color.xyz*material.color.w;
-        break;
-      }
-      else if (material.kind == MaterialKind_Diffuse)
-      {
-        vec3 new_ray = CosineWeightedRandomDirInHemi(hit_data.normal);
-
-        /*Light light = lights[clamp(int(Random01()*lights.length()), 0, lights.length()-1)];
-
-        float light_r1 = sqrt(Random01());
-        float light_r2 = Random01();
-
-        // NOTE: from section 4.2 of https://www.cs.princeton.edu/~funk/tog02.pdf
-        vec3 light_p = (1 - light_r1)*light.p0nx.xyz + (light_r1*(1-light_r2))*light.p1ny.xyz + (light_r1*light_r2)*light.p2nz.xyz;
-
-        vec3 to_light   = light_p - hit_data.point;
-        vec3 to_light_n = normalize(to_light);
-
-        if (CastShadowRay(new_origin, to_light_n, int(light.areaidmat.y)))
-        {
-          Material light_material = materials[int(light.areaidmat.z)];
-
-          vec3 light_normal    = vec3(light.p0nx.w, light.p1ny.w, light.p2nz.w);
-          float light_area     = light.areaidmat.x;
-          vec3 light_intensity = light_material.color.xyz*light_material.color.w;
-
-          float res_pdf = (light_area*dot(-to_light_n, light_normal))/dot(to_light, to_light);
-
-          color += multiplier*material.color.xyz*(1/PI32)*light_intensity*dot(to_light_n, hit_data.normal)*res_pdf;
-        }*/
-
-        multiplier *= material.color.xyz;
-
-        is_reflected    = false;
-        is_transmitted  = false;
-        has_transmitted = false;
-
-        origin = new_origin;
-        ray    = new_ray;
-      }
-      else if (material.kind == MaterialKind_Reflective)
-      {
-        vec3 new_ray = reflect(ray, hit_data.normal);
-
-        is_reflected    = true;
-        is_transmitted  = false;
-        has_transmitted = false;
-
-        origin = new_origin;
-        ray    = new_ray;
-      }
-      else if (material.kind == MaterialKind_Refractive)
-      {
-        float ior = material.color.w;
-
-        //ior = vec3(1.7660, 1.7717, 1.7776)[color_i]; // - sapphire
-        ior = vec3(5.4969, 4.9194, 4.1141)[color_i]; // - germanium
-        //ior = vec3(2.4107, 2.4250, 2.4349)[color_i]; // - diamond
-
-
-        // NOTE: https://en.wikipedia.org/wiki/Schlick%27s_approximation
-        //       https://blog.demofox.org/2017/01/09/raytracing-reflection-refraction-fresnel-total-internal-reflection-and-beers-law/
-        //       https://graphics.stanford.edu/courses/cs148-10-summer/docs/2006--degreve--reflection_refraction.pdf
-
-        float n1 = AIR_IOR;
-        float n2 = ior;
-        if (is_transmitted)
-        {
-          n1 = ior;
-          n2 = AIR_IOR;
-        }
-
-        float n              = n1/n2;
-        float cos_theta_i    = dot(-ray, hit_data.normal);
-        float sin_sq_theta_t = n*n*(1 - cos_theta_i*cos_theta_i);
-        float cos_theta_t    = sqrt(1 - sin_sq_theta_t);
-
-        float r = 1;
-        if (sin_sq_theta_t <= 1)
-        {
-          float r_s = (n1*cos_theta_i - n2*cos_theta_t)/(n1*cos_theta_i + n2*cos_theta_t);
-          float r_p = (n2*cos_theta_i - n1*cos_theta_t)/(n2*cos_theta_i + n1*cos_theta_t);
-
-          r = (r_s*r_s + r_p*r_p)/2;
-        }
-
-        vec3 new_ray;
-        if (Random01() <= r)
-        {
-          new_ray = reflect(ray, hit_data.normal);
-
-          is_reflected    = true;
-          is_transmitted  = false;
-          has_transmitted = false;
-        }
-        else
-        {
-          new_ray = refract(ray, hit_data.normal, n1/n2);
-
-          is_reflected    = false;
-          is_transmitted  = !is_transmitted;
-          has_transmitted = !is_transmitted;
-
-          multiplier *= material.color.xyz;
-        }
-
-        origin = new_origin;
-        ray    = new_ray;
-      }
-    }
-  }
-
-  color *= color_mask;
+				origin = hit.point + hit.normal*0.001;
+				ray    = CosineWeightedRandomDirInHemi(hit.normal);
+			}
+		}
+	}
 
 	vec4 accumulated_value = imageLoad(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy));
 	accumulated_value.xyz += color;
 	imageStore(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy), accumulated_value);
-	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(3*(frame_index+1)), 1));
+	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(frame_index+1), 1));
 }

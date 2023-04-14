@@ -157,13 +157,18 @@ int Resolutions[][2] = {
     {7680, 4320}
 };
 
+char* SceneNames[] = {
+	"cornell",
+	"cornell_diamond_cube",
+	"cornell_diamond",
+};
+
 struct State
 {
-    float fov;
-    
     int current_resolution_index;
     int backbuffer_width;
     int backbuffer_height;
+		char* current_scene;
     
     GLuint display_vao;
     GLuint display_program;
@@ -187,9 +192,9 @@ struct State
 
 struct Triangle_Data
 {
-	float alpha[4];
-	float beta[4];
-	float gamma[4];
+	float p0p2x[4];
+	float p1p2y[4];
+	float p2z[4];
 };
 
 struct Triangle_Material_Data
@@ -218,6 +223,94 @@ struct Light
   float p2nz[4];
   float areaidmat[4];
 };
+
+bool
+LoadScene(State* state, char* scene_name)
+{
+	char buffer[1024] = {};
+	{
+		int written = snprintf(buffer, sizeof(buffer), "../misc/%s.scene", scene_name);
+		if (written < 0 || written == sizeof(buffer))
+		{
+			fprintf(stderr, "ERROR: failed to create path to scene file.\n");
+			return false;
+		}
+	}
+
+	FILE* scene_file = fopen(buffer, "rb");
+	DEFER(if (scene_file != 0) fclose(scene_file));
+
+	if (scene_file == 0)
+	{
+		fprintf(stderr, "ERROR: failed to open scene file.\n");
+		return false;
+	}
+	else
+	{
+		fseek(scene_file, 0, SEEK_END);
+		int scene_file_size = ftell(scene_file);
+		rewind(scene_file);
+
+		u8* scene_data = (u8*)malloc(scene_file_size + 1);
+		memset(scene_data, 0, scene_file_size + 1);
+		DEFER(free(scene_data));
+
+		if (fread(scene_data, 1, scene_file_size, scene_file) != scene_file_size)
+		{
+			fprintf(stderr, "ERROR: failed to read scene file.\n");
+			return false;
+		}
+		else
+		{
+			u32 tri_count   = ((u32*)scene_data)[0];
+			u32 mat_count   = ((u32*)scene_data)[1];
+			u32 light_count = ((u32*)scene_data)[2];
+
+			Triangle_Data* tri_data              =          (Triangle_Data*)(scene_data       + 12);
+			Triangle_Material_Data* tri_mat_data = (Triangle_Material_Data*)(tri_data         + tri_count);
+			Bounding_Sphere* bounding_spheres    =        (Bounding_Sphere*)(tri_mat_data     + tri_count);
+			Material* materials                  =               (Material*)(bounding_spheres + tri_count);
+			Light* lights                        =                  (Light*)(materials        + mat_count);
+
+			if (state->triangle_data != 0) glDeleteBuffers(1, &state->triangle_data);
+			glGenBuffers(1, &state->triangle_data);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, state->triangle_data);
+			glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle_Data)*tri_count, tri_data, 0);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, state->triangle_data);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+			if (state->triangle_mat_data != 0) glDeleteBuffers(1, &state->triangle_mat_data);
+			glGenBuffers(1, &state->triangle_mat_data);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, state->triangle_mat_data);
+			glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle_Material_Data)*tri_count, tri_mat_data, 0);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, state->triangle_mat_data);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+			if (state->bounding_spheres != 0) glDeleteBuffers(1, &state->bounding_spheres);
+			glGenBuffers(1, &state->bounding_spheres);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, state->bounding_spheres);
+			glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Bounding_Sphere)*tri_count, bounding_spheres, 0);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, state->bounding_spheres);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+			if (state->material_data != 0) glDeleteBuffers(1, &state->material_data);
+			glGenBuffers(1, &state->material_data);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, state->material_data);
+			glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Material)*mat_count, materials, 0);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, state->material_data);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+			if (state->lights != 0) glDeleteBuffers(1, &state->lights);
+			glGenBuffers(1, &state->lights);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, state->lights);
+			glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Light)*light_count, lights, 0);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, state->lights);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+			return true;
+		}
+	}
+}
 
 int
 main(int argc, char** argv)
@@ -274,8 +367,8 @@ main(int argc, char** argv)
                 
                 
                 State state = {};
-                state.fov                      = PI32/2;
                 state.current_resolution_index = 5;
+								state.current_scene            = SceneNames[0];
                 state.backbuffer_width         = Resolutions[state.current_resolution_index][0];
                 state.backbuffer_height        = Resolutions[state.current_resolution_index][1];
                 state.should_regen_buffers     = true;
@@ -353,74 +446,7 @@ main(int argc, char** argv)
                     }
                     
 										/// Load scene
-										{
-											FILE* scene_file = fopen("../misc/cornell.scene", "rb");
-											DEFER(fclose(scene_file));
-
-											if (scene_file == 0)
-											{
-												fprintf(stderr, "ERROR: failed to open scene file.\n");
-												setup_failed = true;
-											}
-											else
-											{
-												fseek(scene_file, 0, SEEK_END);
-												int scene_file_size = ftell(scene_file);
-												rewind(scene_file);
-
-												u8* scene_data = (u8*)malloc(scene_file_size + 1);
-												memset(scene_data, 0, scene_file_size + 1);
-												DEFER(free(scene_data));
-
-												if (fread(scene_data, 1, scene_file_size, scene_file) != scene_file_size)
-												{
-													fprintf(stderr, "ERROR: failed to read scene file.\n");
-													setup_failed = true;
-												}
-												else
-												{
-													u32 tri_count   = ((u32*)scene_data)[0];
-													u32 mat_count   = ((u32*)scene_data)[1];
-													u32 light_count = ((u32*)scene_data)[2];
-
-													Triangle_Data* tri_data              = (Triangle_Data*)(scene_data + 12);
-													Triangle_Material_Data* tri_mat_data = (Triangle_Material_Data*)(tri_data + tri_count);
-													Bounding_Sphere* bounding_spheres    = (Bounding_Sphere*)(tri_mat_data + tri_count);
-													Material* materials                  = (Material*)(bounding_spheres + tri_count);
-													Light* lights                        = (Light*)(materials + mat_count);
-
-													glGenBuffers(1, &state.triangle_data);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_data);
-													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle_Data)*tri_count, tri_data, 0);
-													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, state.triangle_data);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-													glGenBuffers(1, &state.triangle_mat_data);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.triangle_mat_data);
-													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Triangle_Material_Data)*tri_count, tri_mat_data, 0);
-													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, state.triangle_mat_data);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-													glGenBuffers(1, &state.bounding_spheres);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.bounding_spheres);
-													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Bounding_Sphere)*tri_count, bounding_spheres, 0);
-													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, state.bounding_spheres);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-													glGenBuffers(1, &state.material_data);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.material_data);
-													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Material)*mat_count, materials, 0);
-													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, state.material_data);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-													glGenBuffers(1, &state.lights);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, state.lights);
-													glBufferStorage(GL_SHADER_STORAGE_BUFFER, sizeof(Light)*light_count, lights, 0);
-													glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, state.lights);
-													glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-												}
-											}
-										}
+										setup_failed = (setup_failed || !LoadScene(&state, state.current_scene));
 
                     /// Create compute program for rendering to the backbuffer
                     state.compute_program = glCreateProgram();
@@ -546,10 +572,31 @@ main(int argc, char** argv)
                         ImGui::SetNextWindowPos(ImVec2((1 - 0.15f)*window_width, 0));
                         ImGui::SetNextWindowSize(ImVec2(0.15f*window_width, (float)window_height));
                         ImGui::Begin("Properties", 0, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoMove);
+
+                        if (ImGui::BeginCombo("Scene", state.current_scene))
+                        {
+                            for (int i = 0; i < ARRAY_SIZE(SceneNames); ++i)
+                            {
+                                if (ImGui::Selectable(SceneNames[i], SceneNames[i] == state.current_scene))
+                                {
+                                    state.current_scene = SceneNames[i];
+																		LoadScene(&state, state.current_scene);
+                                    
+                                    state.should_regen_buffers = true;
+                                }
+                                
+                                if (SceneNames[i] == state.current_scene)
+                                {
+                                    ImGui::SetItemDefaultFocus();
+                                }
+                            }
+                            
+                            ImGui::EndCombo();
+                        }
                         
                         if (ImGui::BeginCombo("Resolution", ResolutionNames[state.current_resolution_index]))
                         {
-                            for (int i = 0; i < IM_ARRAYSIZE(ResolutionNames); ++i)
+                            for (int i = 0; i < ARRAY_SIZE(ResolutionNames); ++i)
                             {
                                 if (ImGui::Selectable(ResolutionNames[i], i == state.current_resolution_index))
                                 {
@@ -569,10 +616,6 @@ main(int argc, char** argv)
                             ImGui::EndCombo();
                         }
                         
-                        if (ImGui::SliderFloat("Fov", &state.fov, 0.1f, 0.9f*PI32, "%.3f", ImGuiSliderFlags_AlwaysClamp))
-                        {
-                            state.should_regen_buffers = true;
-                        }
                         ImGui::Text("last render time: %.2f ms", state.last_render_time);
                         ImGui::End();
                         
@@ -602,11 +645,10 @@ main(int argc, char** argv)
                         glBindImageTexture(0, state.backbuffer_texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
                         glBindImageTexture(1, state.accumulated_frames_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
                         glUniform1ui(0, state.frame_index);
-                        glUniform1f(1, state.fov);
-                        glUniform2f(2, (float)state.backbuffer_width, (float)state.backbuffer_height);
+                        glUniform2f(1, (float)state.backbuffer_width, (float)state.backbuffer_height);
                         
-                        GLuint num_work_groups_x = state.backbuffer_width/32  + (state.backbuffer_width%32 != 0);
-                        GLuint num_work_groups_y = state.backbuffer_height/32 + (state.backbuffer_height%32 != 0);
+                        GLuint num_work_groups_x = state.backbuffer_width/16  + (state.backbuffer_width%16 != 0);
+                        GLuint num_work_groups_y = state.backbuffer_height/16 + (state.backbuffer_height%16 != 0);
                         ASSERT(num_work_groups_x <= 65535 && num_work_groups_y <= 65535);
                         glDispatchCompute(num_work_groups_x, num_work_groups_y, 1);
                         
