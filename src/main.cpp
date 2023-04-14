@@ -161,6 +161,8 @@ char* SceneNames[] = {
 	"cornell",
 	"cornell_diamond_cube",
 	"cornell_diamond",
+	"cornell_w_reflective_sphere",
+	"cornell_w_reflective_cube_refractive_sphere",
 };
 
 struct State

@@ -115,9 +115,10 @@ CosineWeightedRandomDirInHemi(vec3 plane_normal)
 		w = vec3(cos(phi)*sin_theta, sin(phi)*sin_theta, cos_theta);
 	}
 
-	vec3 n = plane_normal;
+	vec3 n = plane_normal.yzx; // NOTE: rotate to move singularity below the object
 	vec3 b1;
 	vec3 b2;
+	vec3 v;
 	{ // NOTE: orthonormal basis from one vector https://backend.orbit.dtu.dk/ws/portalfiles/portal/126824972/onb_frisvad_jgt2012_v2.pdf
 		if (n.z < -0.99999)
 		{
@@ -131,9 +132,11 @@ CosineWeightedRandomDirInHemi(vec3 plane_normal)
 			b1 = vec3(1 - n.x*n.x*a, b, -n.x);
 			b2 = vec3(b, 1 - n.y*n.y*a, -n.y);
 		}
+
+		v = w.x*b1 + w.y*b2 + w.z*n;
 	}
 
-	return w.x*b1 + w.y*b2 + w.z*n;
+	return v.zxy; // NOTE: rotate back
 }
 
 struct Hit_Data
@@ -216,12 +219,8 @@ CastRay(vec3 origin, vec3 ray, bool invert_faces)
 }
 
 void
-main()
+PathTracing(uint bounce_count)
 {
-	uint invocation_index = gl_GlobalInvocationID.y*gl_NumWorkGroups.x*gl_WorkGroupSize.x + gl_GlobalInvocationID.x;
-	uint seed = (invocation_index + frame_index*187272781)*178525871;
-	pcg32_seed(pcg_state, seed, invocation_index);
-
 	vec3 origin           = vec3(0);
 	float near_plane      = backbuffer_dim.x/2;
 	float gaussian_radius = 2;
@@ -232,12 +231,19 @@ main()
   vec3 color      = vec3(0);
   vec3 multiplier = vec3(1);
 
-	for (uint bounce = 0; bounce < 6; ++bounce)
+	uint color_i = clamp(int(Random01()*3), 0, 2);
+	vec3 color_mask = vec3(0);
+	color_mask[color_i] = 1;
+
+	bool is_transmitted = false;
+	for (uint bounce = 0; bounce < bounce_count; ++bounce)
 	{
-		Hit_Data hit = CastRay(origin, ray, false);
+		Hit_Data hit = CastRay(origin, ray, is_transmitted);
 		if (hit.id == -1) break;
 		else
 		{
+			vec3 new_origin = hit.point + hit.normal*0.001;
+
 			Material hit_material = materials[hit.material_id];
 
 			if (hit_material.kind == MaterialKind_Light)
@@ -245,18 +251,85 @@ main()
 				color += multiplier*hit_material.color.xyz*hit_material.color.w;
 				break;
 			}
+			else if (hit_material.kind == MaterialKind_Reflective)
+			{
+				is_transmitted = false;
+
+				origin = new_origin;
+				ray    = reflect(ray, hit.normal);
+			}
+			else if (hit_material.kind == MaterialKind_Refractive)
+			{
+				float ior = hit_material.color.xyz[color_i];
+
+        // NOTE: https://en.wikipedia.org/wiki/Schlick%27s_approximation
+        //       https://blog.demofox.org/2017/01/09/raytracing-reflection-refraction-fresnel-total-internal-reflection-and-beers-law/
+        //       https://graphics.stanford.edu/courses/cs148-10-summer/docs/2006--degreve--reflection_refraction.pdf
+
+        float n1 = AIR_IOR;
+        float n2 = ior;
+        if (is_transmitted)
+        {
+          n1 = ior;
+          n2 = AIR_IOR;
+        }
+
+        float n              = n1/n2;
+        float cos_theta_i    = dot(-ray, hit.normal);
+        float sin_sq_theta_t = n*n*(1 - cos_theta_i*cos_theta_i);
+        float cos_theta_t    = sqrt(1 - sin_sq_theta_t);
+
+        float r = 1;
+        if (sin_sq_theta_t <= 1)
+        {
+          float r_s = (n1*cos_theta_i - n2*cos_theta_t)/(n1*cos_theta_i + n2*cos_theta_t);
+          float r_p = (n2*cos_theta_i - n1*cos_theta_t)/(n2*cos_theta_i + n1*cos_theta_t);
+
+          r = (r_s*r_s + r_p*r_p)/2;
+        }
+
+        vec3 new_ray;
+        if (Random01() <= r)
+        {
+          new_ray = reflect(ray, hit.normal);
+          is_transmitted  = false;
+        }
+        else
+        {
+          new_ray = refract(ray, hit.normal, n1/n2);
+
+          is_transmitted  = !is_transmitted;
+        }
+
+        origin = new_origin;
+        ray    = new_ray;
+			}
 			else
 			{
 				multiplier *= hit_material.color.xyz;
 
-				origin = hit.point + hit.normal*0.001;
+				is_transmitted = false;
+
+				origin = new_origin;
 				ray    = CosineWeightedRandomDirInHemi(hit.normal);
 			}
 		}
 	}
 
+	color *= color_mask;
+
 	vec4 accumulated_value = imageLoad(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy));
 	accumulated_value.xyz += color;
 	imageStore(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy), accumulated_value);
 	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(frame_index+1), 1));
+}
+
+void
+main()
+{
+	uint invocation_index = gl_GlobalInvocationID.y*gl_NumWorkGroups.x*gl_WorkGroupSize.x + gl_GlobalInvocationID.x;
+	uint seed = (invocation_index + frame_index*187272781)*178525871;
+	pcg32_seed(pcg_state, seed, invocation_index);
+
+	PathTracing(5);
 }
