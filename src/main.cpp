@@ -160,9 +160,13 @@ int Resolutions[][2] = {
 char* SceneNames[] = {
 	"cornell",
 	"cornell_diamond_cube",
+	"cornell_germanium_cube",
 	"cornell_diamond",
+	"cornell_germanium",
 	"cornell_w_reflective_sphere",
 	"cornell_w_reflective_cube_refractive_sphere",
+	"cornell_w_reflective_cube_refractive_germanium_sphere",
+	"cornell_w_hidden_light",
 };
 
 struct State
