@@ -174,7 +174,7 @@ Materials := [?]Material{
 		color_r = 1,
 		color_g = 1,
 		color_b = 1,
-		color_a = 30,
+		color_a = 20,
 		kind    = Material_Kind.Light,
 	},
 };
