@@ -6,4 +6,5 @@
 	cd TDT4230-Project/build
 	cmake ..
 	cmake --build .
-	./Debug/TDT4230-Project.exe
+	./Debug/TDT4230-Project.exe  # for windows
+	./TDT4230-Project.exe        # for linux
