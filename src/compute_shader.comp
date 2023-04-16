@@ -263,7 +263,7 @@ PathTracing()
 	float near_plane      = backbuffer_dim.x/2;
 	float gaussian_radius = 2;
 	vec3 ray = vec3(backbuffer_dim.x/2 - gl_GlobalInvocationID.x, -backbuffer_dim.y/2 + gl_GlobalInvocationID.y, near_plane);
-	ray += gaussian_radius*(2*vec3(Random01() + Random01() + Random01(), Random01() + Random01() + Random01(), 0)/3 - vec3(1));
+	ray += vec3(0.5) + gaussian_radius*(2*vec3(Random01() + Random01() + Random01(), Random01() + Random01() + Random01(), 0)/3 - vec3(1));
 	ray = normalize(ray);
 
   vec3 color      = vec3(0);
@@ -323,8 +323,9 @@ PathTracing()
           new_ray = refract(ray, hit.normal, n1/n2);
 
 					// NOTE: BTDF from: https://www.youtube.com/watch?v=sg2xdcB8M3c&list=PLmIqTlJ6KsE2yXzeq02hqCDpOdtj6n6A9&index=12
-					float btdf = (n2*n2)/(n1*n1);
-					multiplier *= btdf;
+					//       Not necessary when the exit interface is the inverse of the enter interface
+					//float btdf = (n2*n2)/(n1*n1);
+					//multiplier *= btdf;
 
           is_transmitted = !is_transmitted;
 					is_diffuse     = false;
