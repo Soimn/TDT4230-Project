@@ -287,7 +287,7 @@ PathTracing()
 
 			if (hit_material.kind == MaterialKind_Light)
 			{
-				if (bounce == 0 || enable_dispersion || !is_diffuse) color += multiplier*hit_material.color.xyz*hit_material.color.w;
+				if (bounce == 0 || !is_diffuse) color += multiplier*hit_material.color.xyz*hit_material.color.w;
 				break;
 			}
 			else if (hit_material.kind == MaterialKind_Reflective)
@@ -335,31 +335,28 @@ PathTracing()
 			}
 			else
 			{
-				if (!enable_dispersion) // NOTE: next event estimation causes flashing colors when used with dispersion
+				Light light = lights[clamp(int(Random01()*lights.length()), 0, lights.length()-1)];
+
+				float light_r1 = sqrt(Random01());
+				float light_r2 = Random01();
+
+				// NOTE: from section 4.2 of https://www.cs.princeton.edu/~funk/tog02.pdf
+				vec3 light_p = (1 - light_r1)*light.p0_nx.xyz + (light_r1*(1-light_r2))*light.p1_ny.xyz + (light_r1*light_r2)*light.p2_nz.xyz;
+
+				vec3 to_light   = light_p - hit.point;
+				vec3 to_light_n = normalize(to_light);
+
+				if (CastRay(new_origin, to_light_n, false).id == int(light.area_id_mat.y))
 				{
-					Light light = lights[clamp(int(Random01()*lights.length()), 0, lights.length()-1)];
+					Material light_material = materials[int(light.area_id_mat.z)];
 
-					float light_r1 = sqrt(Random01());
-					float light_r2 = Random01();
+					vec3 light_normal    = vec3(light.p0_nx.w, light.p1_ny.w, light.p2_nz.w);
+					float light_area     = light.area_id_mat.x;
+					vec3 light_intensity = light_material.color.xyz*light_material.color.w;
 
-					// NOTE: from section 4.2 of https://www.cs.princeton.edu/~funk/tog02.pdf
-					vec3 light_p = (1 - light_r1)*light.p0_nx.xyz + (light_r1*(1-light_r2))*light.p1_ny.xyz + (light_r1*light_r2)*light.p2_nz.xyz;
+					float res_pdf = (light_area*dot(-to_light_n, light_normal))/dot(to_light, to_light);
 
-					vec3 to_light   = light_p - hit.point;
-					vec3 to_light_n = normalize(to_light);
-
-					if (CastRay(new_origin, to_light_n, false).id == int(light.area_id_mat.y))
-					{
-						Material light_material = materials[int(light.area_id_mat.z)];
-
-						vec3 light_normal    = vec3(light.p0_nx.w, light.p1_ny.w, light.p2_nz.w);
-						float light_area     = light.area_id_mat.x;
-						vec3 light_intensity = light_material.color.xyz*light_material.color.w;
-
-						float res_pdf = (light_area*dot(-to_light_n, light_normal))/dot(to_light, to_light);
-
-						color += multiplier*(hit_material.color.xyz/PI32)*light_intensity*dot(to_light_n, hit.normal)*res_pdf;
-					}
+					color += multiplier*(hit_material.color.xyz/PI32)*light_intensity*dot(to_light_n, hit.normal)*res_pdf;
 				}
 
 				multiplier *= hit_material.color.xyz;
@@ -386,6 +383,7 @@ PathTracing()
 	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(adjusted_frame_index+1), 1));
 }
 
+/*
 #define MAX_PATH_LENGTH 15
 
 struct Light_Vertex
@@ -625,6 +623,7 @@ BidirectionalPathTracing()
 	imageStore(accumulated_frames_buffer, ivec2(gl_GlobalInvocationID.xy), accumulated_value);
 	imageStore(backbuffer, ivec2(gl_GlobalInvocationID.xy), vec4(accumulated_value.xyz/(frame_index+1), 1));
 }
+*/
 
 void
 main()
